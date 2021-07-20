@@ -7,6 +7,7 @@ import AWS from 'aws-sdk';
 import DdbToEsHelper from './ddbToEsHelper';
 import PromiseParamAndId from './promiseParamAndId';
 import getComponentLogger from '../loggerBuilder';
+import { DynamoDbUtil } from '../dataServices/dynamoDbUtil';
 
 const REMOVE = 'REMOVE';
 const logger = getComponentLogger();
@@ -32,8 +33,12 @@ export async function handleDdbToEsEvent(event: any) {
             }
 
             const lowercaseResourceType = image.resourceType.toLowerCase();
+
+            // Ensure that no composite resource id + tenant id is indexed as resource id field.
+            DynamoDbUtil.cleanItemId(image);
+
             // eslint-disable-next-line no-await-in-loop
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(lowercaseResourceType);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist(lowercaseResourceType, DynamoDbUtil.hasTenantId(image));
             if (record.eventName === REMOVE) {
                 // If a user manually deletes a record from DDB, let's delete it from ES also
                 const idAndDeletePromise = ddbToEsHelper.getDeleteRecordPromiseParam(image);

@@ -42,7 +42,39 @@ export default class DdbToEsHelper {
         });
     }
 
-    async createIndexAndAliasIfNotExist(indexName: string) {
+    // eslint-disable-next-line class-methods-use-this
+    createPropertyIndexes(includeTenantId: boolean) {
+        const properties = {
+            id: {
+                type: 'keyword',
+                index: true,
+            },
+            resourceType: {
+                type: 'keyword',
+                index: true,
+            },
+            _references: {
+                type: 'keyword',
+                index: true,
+            },
+            documentStatus: {
+                type: 'keyword',
+                index: true,
+            },
+        };
+        if (includeTenantId) {
+            return {
+                ...properties,
+                tenantId: {
+                    type: 'keyword',
+                    index: true,
+                },
+            };
+        }
+        return properties;
+    }
+
+    async createIndexAndAliasIfNotExist(indexName: string, includeTenantId: boolean) {
         logger.debug('entering create index function');
         try {
             const indexExistResponse = await this.ElasticSearch.indices.exists({ index: indexName });
@@ -53,24 +85,7 @@ export default class DdbToEsHelper {
                     index: indexName,
                     body: {
                         mappings: {
-                            properties: {
-                                id: {
-                                    type: 'keyword',
-                                    index: true,
-                                },
-                                resourceType: {
-                                    type: 'keyword',
-                                    index: true,
-                                },
-                                _references: {
-                                    type: 'keyword',
-                                    index: true,
-                                },
-                                documentStatus: {
-                                    type: 'keyword',
-                                    index: true,
-                                },
-                            },
+                            properties: this.createPropertyIndexes(includeTenantId),
                         },
                         aliases: { [`${indexName}-alias`]: {} },
                     },

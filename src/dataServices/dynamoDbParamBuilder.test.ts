@@ -151,6 +151,7 @@ describe('buildUpdateDocumentStatusParam', () => {
 
 describe('buildPutAvailableItemParam', () => {
     const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+    const tenantId = '111111-aaaa-2222-bbb-33333344444';
     const vid = 1;
     const item = {
         resourceType: 'Patient',
@@ -235,10 +236,34 @@ describe('buildPutAvailableItemParam', () => {
 
         expect(actualParams).toEqual(clonedExpectedParams);
     });
+
+    const tenantIdExpectedParams = cloneDeep(expectedParams);
+    tenantIdExpectedParams.Item.id = {
+        S: id + tenantId,
+    };
+    tenantIdExpectedParams.Item.tenantId = {
+        S: tenantId,
+    };
+
+    test('With tenantId: Param has the fields documentStatus, lockEndTs, and references', () => {
+        const actualParams = DynamoDbParamBuilder.buildPutAvailableItemParam(item, id, vid, false, tenantId);
+        expect(actualParams).toEqual(tenantIdExpectedParams);
+    });
+
+    test('With tenantId: Allow overwriting a resource', () => {
+        const actualParams = DynamoDbParamBuilder.buildPutAvailableItemParam(item, id, vid, true, tenantId);
+
+        const clonedExpectedParams = cloneDeep(tenantIdExpectedParams);
+        delete clonedExpectedParams.ConditionExpression;
+
+        expect(actualParams).toEqual(clonedExpectedParams);
+    });
 });
 
 describe('buildGetResourcesQueryParam', () => {
     const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+    const tenantId = '111111-aaaa-2222-bbb-33333344444';
+
     const expectedParam = {
         TableName: '',
         ScanIndexForward: false,
@@ -261,6 +286,41 @@ describe('buildGetResourcesQueryParam', () => {
         const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(id, 'Patient', 2, projectionExpression);
 
         const clonedExpectedParam: any = cloneDeep(expectedParam);
+        clonedExpectedParam.ProjectionExpression = projectionExpression;
+
+        expect(actualParam).toEqual(clonedExpectedParam);
+    });
+
+    const tenantIdExpectedParam = {
+        TableName: '',
+        ScanIndexForward: false,
+        Limit: 2,
+        FilterExpression: '#r = :resourceType and #t = :tenantId',
+        KeyConditionExpression: 'id = :hkey',
+        ExpressionAttributeNames: { '#r': 'resourceType', '#t': 'tenantId' },
+        ExpressionAttributeValues: {
+            ':hkey': { S: '8cafa46d-08b4-4ee4-b51b-803e20ae8126111111-aaaa-2222-bbb-33333344444' },
+            ':resourceType': { S: 'Patient' },
+            ':tenantId': { S: '111111-aaaa-2222-bbb-33333344444' },
+        },
+    };
+
+    test('With tenanId: Param without projection expression', () => {
+        const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(id, 'Patient', 2, undefined, tenantId);
+        expect(actualParam).toEqual(tenantIdExpectedParam);
+    });
+
+    test('With tenanId: Param with projection expression', () => {
+        const projectionExpression = 'id, resourceType, name';
+        const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(
+            id,
+            'Patient',
+            2,
+            projectionExpression,
+            tenantId,
+        );
+
+        const clonedExpectedParam: any = cloneDeep(tenantIdExpectedParam);
         clonedExpectedParam.ProjectionExpression = projectionExpression;
 
         expect(actualParam).toEqual(clonedExpectedParam);

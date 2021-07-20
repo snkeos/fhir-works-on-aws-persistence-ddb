@@ -41,12 +41,12 @@ export class S3DataService implements Persistence {
 
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         const getResponse = await this.dbPersistenceService.readResource(request);
-        return this.getBinaryGetUrl(getResponse, request.id);
+        return this.getBinaryGetUrl(getResponse, request.id, request.tenantId);
     }
 
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
         const getResponse = await this.dbPersistenceService.vReadResource(request);
-        return this.getBinaryGetUrl(getResponse, request.id);
+        return this.getBinaryGetUrl(getResponse, request.id, request.tenantId);
     }
 
     async createResource(request: CreateResourceRequest) {
@@ -61,12 +61,16 @@ export class S3DataService implements Persistence {
         const createResponse = await this.dbPersistenceService.createResource(request);
         const { resource } = createResponse;
 
-        const fileName = this.getFileName(resource.id, resource.meta.versionId, resource.contentType);
+        const fileName = this.getFileName(resource.id, resource.meta.versionId, resource.contentType, request.tenantId);
         let presignedPutUrlResponse;
         try {
             presignedPutUrlResponse = await S3ObjectStorageService.getPresignedPutUrl(fileName);
         } catch (e) {
-            await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id: resource.id });
+            await this.dbPersistenceService.deleteResource({
+                resourceType: request.resourceType,
+                id: resource.id,
+                tenantId: request.tenantId,
+            });
             throw e;
         }
 
@@ -89,13 +93,17 @@ export class S3DataService implements Persistence {
         const updateResponse = await this.dbPersistenceService.updateResource(request);
         const { resource } = updateResponse;
 
-        const fileName = this.getFileName(resource.id, resource.meta.versionId, resource.contentType);
+        const fileName = this.getFileName(resource.id, resource.meta.versionId, resource.contentType, request.tenantId);
         let presignedPutUrlResponse;
         try {
             presignedPutUrlResponse = await S3ObjectStorageService.getPresignedPutUrl(fileName);
         } catch (e) {
             // TODO make this an update
-            await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id: resource.id });
+            await this.dbPersistenceService.deleteResource({
+                resourceType: request.resourceType,
+                id: resource.id,
+                tenantId: request.tenantId,
+            });
             throw e;
         }
 
@@ -108,9 +116,16 @@ export class S3DataService implements Persistence {
         };
     }
 
+    static createPrefix(request: DeleteResourceRequest) {
+        if (request.tenantId !== undefined) {
+            return `${request.tenantId}${SEPARATOR}${request.id}`;
+        }
+        return request.id;
+    }
+
     async deleteResource(request: DeleteResourceRequest) {
         await this.dbPersistenceService.readResource(request);
-        await S3ObjectStorageService.deleteBasedOnPrefix(request.id);
+        await S3ObjectStorageService.deleteBasedOnPrefix(S3DataService.createPrefix(request));
         await this.dbPersistenceService.deleteResource(request);
 
         return { success: true, message: 'Resource deleted' };
@@ -156,13 +171,25 @@ export class S3DataService implements Persistence {
         throw new Error('Method not implemented.');
     }
 
-    private getFileName(id: string, versionId: string, contentType: string) {
+    private getFileName(id: string, versionId: string, contentType: string, tenantId?: string) {
         const fileExtension = mime.extension(contentType);
+        if (tenantId !== undefined) {
+            return `${tenantId}${SEPARATOR}${id}${SEPARATOR}${versionId}.${fileExtension}`;
+        }
         return `${id}${SEPARATOR}${versionId}.${fileExtension}`;
     }
 
-    private async getBinaryGetUrl(dbResponse: GenericResponse, id: string): Promise<GenericResponse> {
-        const fileName = this.getFileName(id, dbResponse.resource.meta.versionId, dbResponse.resource.contentType);
+    private async getBinaryGetUrl(
+        dbResponse: GenericResponse,
+        id: string,
+        tenantId?: string,
+    ): Promise<GenericResponse> {
+        const fileName = this.getFileName(
+            id,
+            dbResponse.resource.meta.versionId,
+            dbResponse.resource.contentType,
+            tenantId,
+        );
         let presignedGetUrlResponse;
         try {
             presignedGetUrlResponse = await S3ObjectStorageService.getPresignedGetUrl(fileName);

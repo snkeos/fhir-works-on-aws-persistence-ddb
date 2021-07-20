@@ -20,11 +20,13 @@ const ObjectStorageService: ObjectStorageInterface = class {
     }
 
     static async getPresignedPutUrl(fileName: string) {
-        return { success: true, message: 'https://VALID_S3_PUT_URL.com' };
+        const url = `https://VALID_S3_PUT_URL.com/${fileName}`;
+        return { success: true, message: url };
     }
 
     static async getPresignedGetUrl(fileName: string) {
-        return { success: true, message: 'https://VALID_S3_GET_URL.com' };
+        const url = `https://VALID_S3_GET_URL.com/${fileName}`;
+        return { success: true, message: url };
     }
 
     static async deleteBasedOnPrefix(fileName: string) {
