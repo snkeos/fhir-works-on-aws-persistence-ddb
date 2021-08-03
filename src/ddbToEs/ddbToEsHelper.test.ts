@@ -54,7 +54,11 @@ describe('DdbToEsHelper', () => {
             // TEST
             await expect(ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(), false)).resolves.not.toThrow();
         });
-        test('Alias already created', async () => {
+        test('Multi Tenant aware: empty set passed in', async () => {
+            // TEST
+            await expect(ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(), true)).resolves.not.toThrow();
+        });
+        const testAliasAlreadyCreated = async (includeTenantId: boolean) => {
             // BUILD
             const mockExists = jest.fn(() => {
                 return { statusCode: 200, body: true };
@@ -69,7 +73,7 @@ describe('DdbToEsHelper', () => {
                 mockExists,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['patient']), false);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['patient']), includeTenantId);
             // VALIDATE
             expect(mockExists).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -78,9 +82,16 @@ describe('DdbToEsHelper', () => {
                     querystring: { expand_wildcards: 'all' },
                 }),
             );
+        };
+        test('Alias already created', async () => {
+            await testAliasAlreadyCreated(false);
         });
 
-        test('Create index and alias', async () => {
+        test('Multi Tenant aware: Alias already created', async () => {
+            await testAliasAlreadyCreated(true);
+        });
+
+        const testCreateIndexAndAlias = async (includeTenantId: boolean) => {
             // BUILD
             // esMock throws 404 for unmocked method, so there's no need to mock HEAD /patient/_alias/patient-alias here
             esMock.add({ method: 'GET', path: '/_alias' }, () => {
@@ -98,19 +109,27 @@ describe('DdbToEsHelper', () => {
                 mockAddIndex,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['organization']), false);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['organization']), includeTenantId);
             // VALIDATE
             expect(mockAddIndex).toHaveBeenCalledWith(
                 expect.objectContaining({
                     body: {
                         aliases: { 'organization-alias': {} },
                         mappings: {
-                            properties: {
-                                _references: { index: true, type: 'keyword' },
-                                documentStatus: { index: true, type: 'keyword' },
-                                id: { index: true, type: 'keyword' },
-                                resourceType: { index: true, type: 'keyword' },
-                            },
+                            properties: includeTenantId
+                                ? {
+                                      _references: { index: true, type: 'keyword' },
+                                      documentStatus: { index: true, type: 'keyword' },
+                                      id: { index: true, type: 'keyword' },
+                                      resourceType: { index: true, type: 'keyword' },
+                                      tenantId: { index: true, type: 'keyword' },
+                                  }
+                                : {
+                                      _references: { index: true, type: 'keyword' },
+                                      documentStatus: { index: true, type: 'keyword' },
+                                      id: { index: true, type: 'keyword' },
+                                      resourceType: { index: true, type: 'keyword' },
+                                  },
                         },
                     },
                     method: 'PUT',
@@ -118,9 +137,15 @@ describe('DdbToEsHelper', () => {
                     querystring: {},
                 }),
             );
+        };
+        test('Create index and alias', async () => {
+            await testCreateIndexAndAlias(false);
         });
 
-        test('Create alias for existing index', async () => {
+        test('Create index and alias', async () => {
+            await testCreateIndexAndAlias(true);
+        });
+        const testCreateAliasForExistingIndex = async (includeTenantId: boolean) => {
             // BUILD
             // esMock throws 404 for unmocked method, so there's no need to mock HEAD /patient/_alias/patient-alias here
             esMock.add({ method: 'GET', path: '/_alias' }, () => {
@@ -138,11 +163,18 @@ describe('DdbToEsHelper', () => {
                 mockAddAlias,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['documentreference']), false);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['documentreference']), includeTenantId);
             // VALIDATE
             expect(mockAddAlias).toHaveBeenCalledWith(
                 expect.objectContaining({ path: '/documentreference/_alias/documentreference-alias' }),
             );
+        };
+        test('Create alias for existing index', async () => {
+            await testCreateAliasForExistingIndex(false);
+        });
+
+        test('Multi Tenant aware: Create alias for existing index', async () => {
+            await testCreateAliasForExistingIndex(true);
         });
     });
 
