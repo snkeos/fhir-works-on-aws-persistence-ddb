@@ -7,6 +7,7 @@ import AWS from 'aws-sdk';
 import DdbToEsHelper from './ddbToEsHelper';
 import ESBulkCommand from './ESBulkCommand';
 import getComponentLogger from '../loggerBuilder';
+import { DynamoDbUtil } from '../dataServices/dynamoDbUtil';
 
 const BINARY_RESOURCE = 'binary';
 const REMOVE = 'REMOVE';
@@ -27,6 +28,7 @@ export async function handleDdbToEsEvent(event: any) {
     try {
         const idToCommand: Record<string, ESBulkCommand> = {};
         const resourceTypesToCreate: Set<string> = new Set();
+        let includeTenantId: boolean = false;
         for (let i = 0; i < event.Records.length; i += 1) {
             const record = event.Records[i];
             logger.debug('EventName: ', record.eventName);
@@ -43,6 +45,9 @@ export async function handleDdbToEsEvent(event: any) {
                 resourceTypesToCreate.add(resourceType);
             }
 
+            // Ensure that no composite resource id + tenant id is indexed as resource id field.
+            DynamoDbUtil.cleanItemId(image);
+            includeTenantId = DynamoDbUtil.hasTenantId(image) || includeTenantId;
             const cmd =
                 record.eventName === REMOVE
                     ? ddbToEsHelper.createBulkESDelete(image)
@@ -55,7 +60,7 @@ export async function handleDdbToEsEvent(event: any) {
                 idToCommand[cmd.id] = cmd;
             }
         }
-        await ddbToEsHelper.createIndexAndAliasIfNotExist(resourceTypesToCreate);
+        await ddbToEsHelper.createIndexAndAliasIfNotExist(resourceTypesToCreate, includeTenantId);
         // update cache of all known aliases
         knownResourceTypes = new Set([...knownResourceTypes, ...resourceTypesToCreate]);
         await ddbToEsHelper.executeEsCmds(Object.values(idToCommand));

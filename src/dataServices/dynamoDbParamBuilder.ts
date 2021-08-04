@@ -20,16 +20,20 @@ export default class DynamoDbParamBuilder {
     static buildUpdateDocumentStatusParam(
         oldStatus: DOCUMENT_STATUS | null,
         newStatus: DOCUMENT_STATUS,
-        id: string,
+        rid: string,
         vid: number,
         resourceType: string,
+        tenantId?: string,
     ) {
+        let id = rid;
         const currentTs = Date.now();
         let futureEndTs = currentTs;
         if (newStatus === DOCUMENT_STATUS.LOCKED) {
             futureEndTs = currentTs + this.LOCK_DURATION_IN_MS;
         }
-
+        if (tenantId !== undefined) {
+            id += tenantId;
+        }
         const params: any = {
             Update: {
                 TableName: RESOURCE_TABLE,
@@ -65,22 +69,37 @@ export default class DynamoDbParamBuilder {
     }
 
     static buildGetResourcesQueryParam(
-        id: string,
+        rid: string,
         resourceType: string,
         maxNumberOfVersions: number,
         projectionExpression?: string,
+        tenantId?: string,
     ) {
+        let id = rid;
+        if (tenantId !== undefined) {
+            id += tenantId;
+        }
+
         const params: any = {
             TableName: RESOURCE_TABLE,
             ScanIndexForward: false,
             Limit: maxNumberOfVersions,
-            FilterExpression: '#r = :resourceType',
+            FilterExpression: tenantId === undefined ? '#r = :resourceType' : '#r = :resourceType and #t = :tenantId',
             KeyConditionExpression: 'id = :hkey',
-            ExpressionAttributeNames: { '#r': 'resourceType' },
-            ExpressionAttributeValues: DynamoDBConverter.marshall({
-                ':hkey': id,
-                ':resourceType': resourceType,
-            }),
+            ExpressionAttributeNames:
+                tenantId === undefined ? { '#r': 'resourceType' } : { '#r': 'resourceType', '#t': 'tenantId' },
+            ExpressionAttributeValues: DynamoDBConverter.marshall(
+                tenantId === undefined
+                    ? {
+                          ':hkey': id,
+                          ':resourceType': resourceType,
+                      }
+                    : {
+                          ':hkey': id,
+                          ':resourceType': resourceType,
+                          ':tenantId': tenantId,
+                      },
+            ),
         };
 
         if (projectionExpression) {
@@ -90,7 +109,11 @@ export default class DynamoDbParamBuilder {
         return params;
     }
 
-    static buildDeleteParam(id: string, vid: number) {
+    static buildDeleteParam(rid: string, vid: number, tenantId?: string) {
+        let id = rid;
+        if (tenantId !== undefined) {
+            id += tenantId;
+        }
         const params: any = {
             Delete: {
                 TableName: RESOURCE_TABLE,
@@ -104,7 +127,11 @@ export default class DynamoDbParamBuilder {
         return params;
     }
 
-    static buildGetItemParam(id: string, vid: number) {
+    static buildGetItemParam(rid: string, vid: number, tenantId?: string) {
+        let id = rid;
+        if (tenantId !== undefined) {
+            id += tenantId;
+        }
         return {
             TableName: RESOURCE_TABLE,
             Key: DynamoDBConverter.marshall({
@@ -120,8 +147,14 @@ export default class DynamoDbParamBuilder {
      * @param allowOverwriteId - Allow overwriting a resource with the same id
      * @return DDB params for PUT operation
      */
-    static buildPutAvailableItemParam(item: any, id: string, vid: number, allowOverwriteId: boolean = false) {
-        const newItem = DynamoDbUtil.prepItemForDdbInsert(item, id, vid, DOCUMENT_STATUS.AVAILABLE);
+    static buildPutAvailableItemParam(
+        item: any,
+        id: string,
+        vid: number,
+        allowOverwriteId: boolean = false,
+        tenantId?: string,
+    ) {
+        const newItem = DynamoDbUtil.prepItemForDdbInsert(item, id, vid, DOCUMENT_STATUS.AVAILABLE, tenantId);
         const param: any = {
             TableName: RESOURCE_TABLE,
             Item: DynamoDBConverter.marshall(newItem),

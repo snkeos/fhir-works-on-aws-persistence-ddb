@@ -8,11 +8,12 @@ import DynamoDbHelper from './dynamoDbHelper';
 import { utcTimeRegExp } from '../../testUtilities/regExpressions';
 import { ConditionalCheckFailedExceptionMock } from '../../testUtilities/ConditionalCheckFailedException';
 import DOCUMENT_STATUS from './documentStatus';
-import { DOCUMENT_STATUS_FIELD, DynamoDbUtil } from './dynamoDbUtil';
+import { DOCUMENT_STATUS_FIELD, TENANT_ID_FIELD, DynamoDbUtil } from './dynamoDbUtil';
 
 AWSMock.setSDKInstance(AWS);
 
 const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+const testTenantId = '1131acd3-3b35-6aec-bcc1-234e565ea455';
 const resourceType = 'Patient';
 const resource: any = {
     id,
@@ -28,11 +29,16 @@ const resource: any = {
 };
 resource[DOCUMENT_STATUS_FIELD] = DOCUMENT_STATUS.AVAILABLE;
 
-function getExpectedResponse(res: any, versionId: string) {
+const tidresource = resource;
+tidresource[TENANT_ID_FIELD] = testTenantId;
+
+tidresource.id += testTenantId;
+
+function getExpectedResponse(res: any, versionId: string, tenantId?: string) {
     let expectedResource: any = cloneDeep(res);
     expectedResource = DynamoDbUtil.cleanItem(expectedResource);
     expectedResource.meta = { versionId, lastUpdated: expect.stringMatching(utcTimeRegExp) };
-
+    expectedResource.tenantId = tenantId;
     return {
         message: 'Resource found',
         resource: expectedResource,
@@ -54,6 +60,39 @@ describe('getMostRecentResource', () => {
 
         const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
         await expect(ddbHelper.getMostRecentResource(resourceType, id)).resolves.toEqual(expectedResponse);
+    });
+
+    test('SUCCESS: TenantId: Found most recent resource', async () => {
+        // READ items (Success)
+        AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
+            callback(null, {
+                Items: [DynamoDBConverter.marshall(tidresource)],
+            });
+        });
+
+        const expectedResponse = getExpectedResponse(resource, '1');
+
+        const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
+        await expect(ddbHelper.getMostRecentResource(resourceType, id, undefined, testTenantId)).resolves.toEqual(
+            expectedResponse,
+        );
+    });
+
+    test('SUCCESS: TenantId: Found most recent resource with tenantid projection', async () => {
+        // READ items (Success)
+        AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
+            callback(null, {
+                Items: [DynamoDBConverter.marshall(tidresource)],
+            });
+        });
+
+        const expectedResponse = getExpectedResponse(resource, '1', testTenantId);
+
+        const projectionExpression = 'id, resourceType, meta, tenantId';
+        const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
+        await expect(
+            ddbHelper.getMostRecentResource(resourceType, id, projectionExpression, testTenantId),
+        ).resolves.toEqual(expectedResponse);
     });
     test('FAILED: resourceType of request does not match resourceType retrieved', async () => {
         // READ items (Success)

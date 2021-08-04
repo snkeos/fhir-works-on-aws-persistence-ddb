@@ -43,7 +43,39 @@ export default class DdbToEsHelper {
         });
     }
 
-    async createIndexAndAliasIfNotExist(resourceTypes: Set<string>) {
+    // eslint-disable-next-line class-methods-use-this
+    createPropertyIndexes(includeTenantId: boolean) {
+        const properties = {
+            id: {
+                type: 'keyword',
+                index: true,
+            },
+            resourceType: {
+                type: 'keyword',
+                index: true,
+            },
+            _references: {
+                type: 'keyword',
+                index: true,
+            },
+            documentStatus: {
+                type: 'keyword',
+                index: true,
+            },
+        };
+        if (includeTenantId) {
+            return {
+                ...properties,
+                tenantId: {
+                    type: 'keyword',
+                    index: true,
+                },
+            };
+        }
+        return properties;
+    }
+
+    async createIndexAndAliasIfNotExist(resourceTypes: Set<string>, includeTenantId: boolean) {
         if (resourceTypes.size === 0) {
             return;
         }
@@ -85,24 +117,7 @@ export default class DdbToEsHelper {
                         index,
                         body: {
                             mappings: {
-                                properties: {
-                                    id: {
-                                        type: 'keyword',
-                                        index: true,
-                                    },
-                                    resourceType: {
-                                        type: 'keyword',
-                                        index: true,
-                                    },
-                                    _references: {
-                                        type: 'keyword',
-                                        index: true,
-                                    },
-                                    documentStatus: {
-                                        type: 'keyword',
-                                        index: true,
-                                    },
-                                },
+                                properties: this.createPropertyIndexes(includeTenantId),
                             },
                             aliases: { [alias]: {} },
                         },

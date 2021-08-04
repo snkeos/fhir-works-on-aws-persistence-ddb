@@ -209,6 +209,7 @@ export class DynamoDbBundleService implements Bundle {
                 resourceType: request.resourceType,
                 id: request.id,
                 operation: request.operation,
+                tenantId: request.tenantId,
             };
         });
 
@@ -228,12 +229,14 @@ export class DynamoDbBundleService implements Bundle {
 
         // We need to read the items so we can find the versionId of each item
         const itemReadPromises = itemsToLock.map(async itemToLock => {
-            const projectionExpression = 'id, resourceType, meta';
+            const projectionExpression =
+                itemToLock.tenantId === undefined ? 'id, resourceType, meta' : 'id, resourceType, meta, tenantId';
             try {
                 return await this.dynamoDbHelper.getMostRecentResource(
                     itemToLock.resourceType,
                     itemToLock.id,
                     projectionExpression,
+                    itemToLock.tenantId,
                 );
             } catch (e) {
                 if (e instanceof ResourceNotFoundError) {
@@ -271,14 +274,15 @@ export class DynamoDbBundleService implements Bundle {
                 // eslint-disable-next-line no-continue
                 continue;
             }
-            const { resourceType, id, meta } = itemResponse.resource;
 
+            const { resourceType, id, meta, tenantId } = itemResponse.resource;
             const vid = parseInt(meta.versionId, 10);
 
             const lockedItem: ItemRequest = {
                 resourceType,
                 id,
                 vid,
+                tenantId,
                 operation: allNonCreateRequests[i].operation,
             };
             if (lockedItem.operation === 'update') {
@@ -293,6 +297,7 @@ export class DynamoDbBundleService implements Bundle {
                     id,
                     vid,
                     resourceType,
+                    tenantId,
                 ),
             );
         }
@@ -362,6 +367,7 @@ export class DynamoDbBundleService implements Bundle {
                         resourceType: request.resourceType,
                         path: entry[0],
                         value: entry[1],
+                        tenantId: request.tenantId,
                     };
                 });
             })
@@ -375,6 +381,7 @@ export class DynamoDbBundleService implements Bundle {
             value: string;
             resourceType: string;
             id: string;
+            tenantId?: string;
         }[] = [];
         requestsWithReferencesThatMustBeLookedUp.forEach((item: any) => {
             const fullUrlMatch = item.value.match(captureFullUrlParts);
@@ -405,6 +412,7 @@ export class DynamoDbBundleService implements Bundle {
                         item.resourceType,
                         item.id,
                         'meta',
+                        item.tenantId,
                     );
                     const { meta } = itemResponse.resource;
                     set(item.resource, item.path, `${item.value}/_history/${meta.versionId}`);
@@ -453,6 +461,7 @@ export class DynamoDbBundleService implements Bundle {
                 lockedItem.id,
                 lockedItem.vid || 0,
                 lockedItem.resourceType,
+                lockedItem.tenantId,
             );
         });
 

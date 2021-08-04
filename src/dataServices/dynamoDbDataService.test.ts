@@ -49,6 +49,7 @@ describe('CREATE', () => {
     });
     // BUILD
     const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+    const tenantId = '111111-aaaa-2222-bbb-33333344444';
     const resourceType = 'Patient';
     const resource = {
         id,
@@ -129,6 +130,30 @@ describe('CREATE', () => {
         await expect(dynamoDbDataService.createResource({ resource, resourceType })).rejects.toThrowError(
             new InvalidResourceError('Resource creation failed, id matches an existing resource'),
         );
+    });
+    test('SUCCESS: With tenantId: Create Resource without meta', async () => {
+        // READ items (Success)
+        AWSMock.mock('DynamoDB', 'putItem', (params: PutItemInput, callback: Function) => {
+            callback(null, 'success');
+        });
+
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+
+        // OPERATE
+        const serviceResponse = await dynamoDbDataService.createResource({ resource, resourceType, tenantId });
+
+        // CHECK
+        const expectedResource: any = { ...resource };
+        expectedResource.meta = {
+            ...expectedResource.meta,
+            versionId: '1',
+            lastUpdated: expect.stringMatching(utcTimeRegExp),
+        };
+        expectedResource.id = expect.stringMatching(uuidRegExp);
+
+        expect(serviceResponse.success).toEqual(true);
+        expect(serviceResponse.message).toEqual('Resource created');
+        expect(serviceResponse.resource).toStrictEqual(expectedResource);
     });
 });
 
@@ -243,6 +268,38 @@ describe('READ', () => {
         await expect(dynamoDbDataService.vReadResource({ resourceType, id, vid })).rejects.toThrowError(
             new ResourceVersionNotFoundError(resourceType, id, vid),
         );
+    });
+
+    test('SUCCESS: With tenanId: Get Resource', async () => {
+        // BUILD
+        const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+        const tenantId = '111111-aaaa-2222-bbb-33333344444';
+
+        const resourceType = 'Patient';
+        const resource = {
+            id,
+            resourceType,
+            name: [
+                {
+                    family: 'Jameson',
+                    given: ['Matt'],
+                },
+            ],
+            meta: { versionId: '1', lastUpdated: new Date().toISOString() },
+        };
+
+        sinon
+            .stub(DynamoDbHelper.prototype, 'getMostRecentUserReadableResource')
+            .returns(Promise.resolve({ message: 'Resource found', resource }));
+
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+
+        // OPERATE
+        const serviceResponse = await dynamoDbDataService.readResource({ resourceType, id, tenantId });
+
+        // CHECK
+        expect(serviceResponse.message).toEqual('Resource found');
+        expect(serviceResponse.resource).toStrictEqual(resource);
     });
 });
 
@@ -374,6 +431,79 @@ describe('UPDATE', () => {
             resourceType: 'Patient',
             id,
             resource: input,
+        });
+
+        // CHECK
+        const expectedResource: any = { ...expectedReturnFromBundle };
+        expectedResource.meta.lastUpdated = expect.stringMatching(utcTimeRegExp);
+
+        expect(serviceResponse.success).toEqual(true);
+        expect(serviceResponse.message).toEqual('Resource updated');
+        expect(serviceResponse.resource).toStrictEqual(expectedResource);
+    });
+
+    test('SUCCESS: With TenantId: Update Resource with existing meta', async () => {
+        // BUILD
+        const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+        const tenantId = '111111-aaaa-2222-bbb-33333344444';
+
+        const resourcev1 = {
+            id: id + tenantId,
+            vid: 1,
+            resourceType: 'Patient',
+            name: [
+                {
+                    family: 'Jameson',
+                    given: ['Matt'],
+                },
+            ],
+            meta: {
+                versionId: '1',
+                lastUpdated: 'yesterday',
+                security: { system: 'skynet' },
+                tag: [{ display: 'test' }, { display: 'test1' }],
+            },
+            tenantId,
+        };
+
+        sinon
+            .stub(DynamoDbHelper.prototype, 'getMostRecentUserReadableResource')
+            .returns(Promise.resolve({ message: 'Resource found', resource: resourcev1 }));
+
+        const vid = 2;
+        const input = { ...resourcev1, meta: { security: { system: 'gondor' } } };
+        const expectedReturnFromBundle = {
+            ...input,
+            meta: { versionId: vid.toString(), lastUpdated: new Date().toISOString(), security: { system: 'gondor' } },
+        };
+        const batchReadWriteServiceResponse: BundleResponse = {
+            success: true,
+            message: '',
+            batchReadWriteResponses: [
+                {
+                    id,
+                    vid: vid.toString(),
+                    tenantId,
+                    resourceType: 'Patient',
+                    operation: 'update',
+                    resource: expectedReturnFromBundle,
+                    lastModified: '2020-06-18T20:20:12.763Z',
+                },
+            ],
+        };
+
+        sinon
+            .stub(DynamoDbBundleService.prototype, 'transaction')
+            .returns(Promise.resolve(batchReadWriteServiceResponse));
+
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+
+        // OPERATE
+        const serviceResponse = await dynamoDbDataService.updateResource({
+            resourceType: 'Patient',
+            id,
+            resource: input,
+            tenantId,
         });
 
         // CHECK

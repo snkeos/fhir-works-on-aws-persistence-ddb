@@ -26,6 +26,14 @@ const DynamoDbBundleService: Bundle = class {
             };
         }
 
+        let tenantId;
+        for (let i = 0; i < request.requests.length; i += 1) {
+            const currentRequest = request.requests[i];
+            if (currentRequest.tenantId !== undefined) {
+                tenantId = currentRequest.tenantId;
+                break;
+            }
+        }
         const bundleEntryResponses: BatchReadWriteResponse[] = [
             {
                 id: '8cafa46d-08b4-4ee4-b51b-803e20ae8126',
@@ -33,6 +41,7 @@ const DynamoDbBundleService: Bundle = class {
                 operation: 'update',
                 lastModified: '2020-04-23T21:19:35.592Z',
                 resourceType: 'Patient',
+                tenantId,
                 resource: {},
             },
             {
@@ -41,6 +50,7 @@ const DynamoDbBundleService: Bundle = class {
                 operation: 'create',
                 lastModified: '2020-04-23T21:19:35.592Z',
                 resourceType: 'Patient',
+                tenantId,
                 resource: {},
             },
             {
@@ -48,6 +58,7 @@ const DynamoDbBundleService: Bundle = class {
                 vid: '1',
                 operation: 'read',
                 lastModified: '2020-04-10T20:41:39.912Z',
+                tenantId,
                 resource: {
                     active: true,
                     resourceType: 'Patient',
@@ -82,6 +93,7 @@ const DynamoDbBundleService: Bundle = class {
                 lastModified: '2020-04-23T21:19:35.593Z',
                 resource: {},
                 resourceType: 'Patient',
+                tenantId,
             },
         ];
         return {
