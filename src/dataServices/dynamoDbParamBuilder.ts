@@ -127,10 +127,7 @@ export default class DynamoDbParamBuilder {
     }
 
     static buildGetItemParam(rid: string, vid: number, tenantId?: string) {
-        let id = rid;
-        if (tenantId !== undefined) {
-            id += tenantId;
-        }
+        const id = DynamoDbUtil.buildItemId(rid, tenantId)
         return {
             TableName: RESOURCE_TABLE,
             Key: DynamoDBConverter.marshall({

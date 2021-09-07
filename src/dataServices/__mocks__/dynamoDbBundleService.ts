@@ -26,14 +26,8 @@ const DynamoDbBundleService: Bundle = class {
             };
         }
 
-        let tenantId;
-        for (let i = 0; i < request.requests.length; i += 1) {
-            const currentRequest = request.requests[i];
-            if (currentRequest.tenantId !== undefined) {
-                tenantId = currentRequest.tenantId;
-                break;
-            }
-        }
+        const tenantId = request.requests.find(element => element.tenantId !== undefined);
+
         const bundleEntryResponses: BatchReadWriteResponse[] = [
             {
                 id: '8cafa46d-08b4-4ee4-b51b-803e20ae8126',

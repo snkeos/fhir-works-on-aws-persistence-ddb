@@ -15,6 +15,14 @@ export const TENANT_ID_FIELD = 'tenantId';
 export const REFERENCES_FIELD = '_references';
 
 export class DynamoDbUtil {
+
+    static buildItemId(resourceId: string, tenantId?: string) {
+        if (tenantId !== undefined) {
+            return resourceId + tenantId;
+        }
+        return resourceId;
+    }
+
     static cleanItem(item: any, projectionExpression?: string) {
         const cleanedItem = clone(item);
 
@@ -58,11 +66,9 @@ export class DynamoDbUtil {
         tenantId?: string,
     ) {
         const item = clone(resource);
+        item.id = DynamoDbUtil.buildItemId(id, tenantId)
         if (tenantId !== undefined) {
-            item.id = id + tenantId;
             item[TENANT_ID_FIELD] = tenantId;
-        } else {
-            item.id = id;
         }
         item.vid = vid;
 
