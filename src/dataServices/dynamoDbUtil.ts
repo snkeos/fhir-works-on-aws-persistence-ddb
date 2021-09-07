@@ -24,6 +24,8 @@ export class DynamoDbUtil {
         delete cleanedItem[REFERENCES_FIELD];
         if (DynamoDbUtil.hasTenantId(cleanedItem)) {
             DynamoDbUtil.cleanItemId(cleanedItem);
+            // Usually the tenant id is removed during clean up
+            // The only exeception is if it is explicitly requested by a projection expression,(e.g. processing transaction bundles)
             if (!(projectionExpression !== undefined && projectionExpression.search(TENANT_ID_FIELD) !== -1)) {
                 delete cleanedItem[TENANT_ID_FIELD];
             }
@@ -36,10 +38,7 @@ export class DynamoDbUtil {
     }
 
     static hasTenantId(item: any) {
-        if (item[TENANT_ID_FIELD] !== undefined) {
-            return true;
-        }
-        return false;
+        return item[TENANT_ID_FIELD] !== undefined;
     }
 
     static cleanItemId(item: any) {

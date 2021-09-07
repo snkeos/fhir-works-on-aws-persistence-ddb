@@ -4,6 +4,7 @@
  */
 
 import { ExportJobStatus } from 'fhir-works-on-aws-interface';
+import { pickBy } from 'lodash';
 import {
     DynamoDBConverter,
     RESOURCE_TABLE,
@@ -89,16 +90,14 @@ export default class DynamoDbParamBuilder {
             ExpressionAttributeNames:
                 tenantId === undefined ? { '#r': 'resourceType' } : { '#r': 'resourceType', '#t': 'tenantId' },
             ExpressionAttributeValues: DynamoDBConverter.marshall(
-                tenantId === undefined
-                    ? {
-                          ':hkey': id,
-                          ':resourceType': resourceType,
-                      }
-                    : {
-                          ':hkey': id,
-                          ':resourceType': resourceType,
-                          ':tenantId': tenantId,
-                      },
+                pickBy(
+                    {
+                        ':hkey': id,
+                        ':resourceType': resourceType,
+                        ':tenantId': tenantId,
+                    },
+                    v => v !== undefined,
+                ),
             ),
         };
 

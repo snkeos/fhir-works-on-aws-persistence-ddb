@@ -48,51 +48,39 @@ describe('getMostRecentResource', () => {
     afterEach(() => {
         AWSMock.restore();
     });
-    test('SUCCESS: Found most recent resource', async () => {
+
+    const getMostRecentResourceHelper = async (
+        resourceData: any,
+        rType: string,
+        rId: string,
+        tenantId?: string,
+        projectionExpression?: string,
+    ) => {
         // READ items (Success)
         AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
             callback(null, {
-                Items: [DynamoDBConverter.marshall(resource)],
+                Items: [DynamoDBConverter.marshall(resourceData)],
             });
         });
 
-        const expectedResponse = getExpectedResponse(resource, '1');
+        const expectedResponse = getExpectedResponse(resourceData, '1');
 
         const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
-        await expect(ddbHelper.getMostRecentResource(resourceType, id)).resolves.toEqual(expectedResponse);
+        await expect(ddbHelper.getMostRecentResource(rType, rId, projectionExpression, tenantId)).resolves.toEqual(
+            expectedResponse,
+        );
+    };
+    test('SUCCESS: Found most recent resource', async () => {
+        await getMostRecentResourceHelper(resource, resourceType, id);
     });
 
     test('SUCCESS: TenantId: Found most recent resource', async () => {
-        // READ items (Success)
-        AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
-            callback(null, {
-                Items: [DynamoDBConverter.marshall(tidresource)],
-            });
-        });
-
-        const expectedResponse = getExpectedResponse(resource, '1');
-
-        const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
-        await expect(ddbHelper.getMostRecentResource(resourceType, id, undefined, testTenantId)).resolves.toEqual(
-            expectedResponse,
-        );
+        await getMostRecentResourceHelper(resource, resourceType, id, undefined, testTenantId);
     });
 
     test('SUCCESS: TenantId: Found most recent resource with tenantid projection', async () => {
-        // READ items (Success)
-        AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
-            callback(null, {
-                Items: [DynamoDBConverter.marshall(tidresource)],
-            });
-        });
-
-        const expectedResponse = getExpectedResponse(resource, '1', testTenantId);
-
         const projectionExpression = 'id, resourceType, meta, tenantId';
-        const ddbHelper = new DynamoDbHelper(new AWS.DynamoDB());
-        await expect(
-            ddbHelper.getMostRecentResource(resourceType, id, projectionExpression, testTenantId),
-        ).resolves.toEqual(expectedResponse);
+        await getMostRecentResourceHelper(resource, resourceType, id, projectionExpression, testTenantId);
     });
     test('FAILED: resourceType of request does not match resourceType retrieved', async () => {
         // READ items (Success)
