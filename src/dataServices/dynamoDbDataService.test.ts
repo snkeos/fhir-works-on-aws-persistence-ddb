@@ -11,6 +11,8 @@ import AWS from 'aws-sdk';
 import isEqual from 'lodash/isEqual';
 // eslint-disable-next-line import/no-extraneous-dependencies
 import {
+    CreateResourceRequest,
+    ReadResourceRequest,
     BundleResponse,
     InitiateExportRequest,
     ResourceNotFoundError,
@@ -61,7 +63,8 @@ describe('CREATE', () => {
             },
         ],
     };
-    test('SUCCESS: Create Resource without meta', async () => {
+
+    const createResourceHelper = async (request: CreateResourceRequest) => {
         // READ items (Success)
         AWSMock.mock('DynamoDB', 'putItem', (params: PutItemInput, callback: Function) => {
             callback(null, 'success');
@@ -70,10 +73,10 @@ describe('CREATE', () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
 
         // OPERATE
-        const serviceResponse = await dynamoDbDataService.createResource({ resource, resourceType });
+        const serviceResponse = await dynamoDbDataService.createResource(request);
 
         // CHECK
-        const expectedResource: any = { ...resource };
+        const expectedResource: any = { ...request.resource };
         expectedResource.meta = {
             ...expectedResource.meta,
             versionId: '1',
@@ -84,6 +87,10 @@ describe('CREATE', () => {
         expect(serviceResponse.success).toEqual(true);
         expect(serviceResponse.message).toEqual('Resource created');
         expect(serviceResponse.resource).toStrictEqual(expectedResource);
+    };
+
+    test('SUCCESS: Create Resource without meta', async () => {
+        await createResourceHelper({ resource, resourceType });
     });
     test('SUCCESS: Create Resource with meta', async () => {
         const resourceWithMeta = {
@@ -95,28 +102,7 @@ describe('CREATE', () => {
                 tag: [{ display: 'test' }, { display: 'test1' }],
             },
         };
-        // READ items (Success)
-        AWSMock.mock('DynamoDB', 'putItem', (params: PutItemInput, callback: Function) => {
-            callback(null, 'success');
-        });
-
-        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-
-        // OPERATE
-        const serviceResponse = await dynamoDbDataService.createResource({ resource: resourceWithMeta, resourceType });
-
-        // CHECK
-        const expectedResource: any = { ...resourceWithMeta };
-        expectedResource.meta = {
-            ...expectedResource.meta,
-            versionId: '1',
-            lastUpdated: expect.stringMatching(utcTimeRegExp),
-        };
-        expectedResource.id = expect.stringMatching(uuidRegExp);
-
-        expect(serviceResponse.success).toEqual(true);
-        expect(serviceResponse.message).toEqual('Resource created');
-        expect(serviceResponse.resource).toStrictEqual(expectedResource);
+        await createResourceHelper({ resource: resourceWithMeta, resourceType });
     });
     test('FAILED: Resource with Id already exists', async () => {
         // READ items (Success)
@@ -132,28 +118,7 @@ describe('CREATE', () => {
         );
     });
     test('SUCCESS: With tenantId: Create Resource without meta', async () => {
-        // READ items (Success)
-        AWSMock.mock('DynamoDB', 'putItem', (params: PutItemInput, callback: Function) => {
-            callback(null, 'success');
-        });
-
-        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-
-        // OPERATE
-        const serviceResponse = await dynamoDbDataService.createResource({ resource, resourceType, tenantId });
-
-        // CHECK
-        const expectedResource: any = { ...resource };
-        expectedResource.meta = {
-            ...expectedResource.meta,
-            versionId: '1',
-            lastUpdated: expect.stringMatching(utcTimeRegExp),
-        };
-        expectedResource.id = expect.stringMatching(uuidRegExp);
-
-        expect(serviceResponse.success).toEqual(true);
-        expect(serviceResponse.message).toEqual('Resource created');
-        expect(serviceResponse.resource).toStrictEqual(expectedResource);
+        await createResourceHelper({ resource, resourceType, tenantId });
     });
 });
 
@@ -166,6 +131,20 @@ describe('READ', () => {
         AWSMock.restore();
         sinon.restore();
     });
+    const readResourceHelper = async (request: ReadResourceRequest, resource: any) => {
+        sinon
+            .stub(DynamoDbHelper.prototype, 'getMostRecentUserReadableResource')
+            .returns(Promise.resolve({ message: 'Resource found', resource }));
+
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+
+        // OPERATE
+        const serviceResponse = await dynamoDbDataService.readResource(request);
+
+        // CHECK
+        expect(serviceResponse.message).toEqual('Resource found');
+        expect(serviceResponse.resource).toStrictEqual(resource);
+    };
     test('SUCCESS: Get Resource', async () => {
         // BUILD
         const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
@@ -181,19 +160,7 @@ describe('READ', () => {
             ],
             meta: { versionId: '1', lastUpdated: new Date().toISOString() },
         };
-
-        sinon
-            .stub(DynamoDbHelper.prototype, 'getMostRecentUserReadableResource')
-            .returns(Promise.resolve({ message: 'Resource found', resource }));
-
-        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-
-        // OPERATE
-        const serviceResponse = await dynamoDbDataService.readResource({ resourceType, id });
-
-        // CHECK
-        expect(serviceResponse.message).toEqual('Resource found');
-        expect(serviceResponse.resource).toStrictEqual(resource);
+        await readResourceHelper({ resourceType, id }, resource);
     });
     test('SUCCESS: Get Versioned Resource', async () => {
         // BUILD
@@ -287,19 +254,7 @@ describe('READ', () => {
             ],
             meta: { versionId: '1', lastUpdated: new Date().toISOString() },
         };
-
-        sinon
-            .stub(DynamoDbHelper.prototype, 'getMostRecentUserReadableResource')
-            .returns(Promise.resolve({ message: 'Resource found', resource }));
-
-        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-
-        // OPERATE
-        const serviceResponse = await dynamoDbDataService.readResource({ resourceType, id, tenantId });
-
-        // CHECK
-        expect(serviceResponse.message).toEqual('Resource found');
-        expect(serviceResponse.resource).toStrictEqual(resource);
+        await readResourceHelper({ resourceType, id, tenantId }, resource);
     });
 });
 

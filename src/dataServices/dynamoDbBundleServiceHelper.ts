@@ -129,14 +129,9 @@ export default class DynamoDbBundleServiceHelper {
                 }
                 case 'read': {
                     // Read the latest version with documentStatus = "LOCKED"
-                    let { id } = request;
                     const { tenantId } = request;
-                    const vid = idToVersionId[id];
-
-                    if (tenantId !== undefined) {
-                        id += tenantId;
-                    }
-
+                    const vid = idToVersionId[request.id];
+                    const id = DynamoDbUtil.buildItemId(request.id, tenantId);
                     readRequests.push({
                         Get: {
                             TableName: RESOURCE_TABLE,
