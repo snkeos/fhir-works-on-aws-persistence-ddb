@@ -571,11 +571,12 @@ export class DynamoDbBundleService implements Bundle {
                   }
                 : null;
 
+        
         let batchReadWriteResponses: BatchReadWriteResponse[] = [];
         let allLockedItems: ItemRequest[] = lockedItems;
         try {
             if (writeParams) {
-                console.log(writeParams);
+                console.log(JSON.stringify(writeParams));
                 await this.dynamoDb.transactWriteItems(writeParams).promise();
             }
 
