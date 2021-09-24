@@ -571,7 +571,6 @@ export class DynamoDbBundleService implements Bundle {
                   }
                 : null;
 
-        
         let batchReadWriteResponses: BatchReadWriteResponse[] = [];
         let allLockedItems: ItemRequest[] = lockedItems;
         try {

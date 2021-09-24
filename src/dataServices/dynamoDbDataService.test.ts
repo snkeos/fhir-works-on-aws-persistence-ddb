@@ -32,11 +32,11 @@ import DynamoDbHelper from './dynamoDbHelper';
 import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 import { ConditionalCheckFailedExceptionMock } from '../../testUtilities/ConditionalCheckFailedException';
 
-jest.mock('../bulkExport/bulkExport');
-AWSMock.setSDKInstance(AWS);
-
 // eslint-disable-next-line import/order
 import sinon = require('sinon');
+
+jest.mock('../bulkExport/bulkExport');
+AWSMock.setSDKInstance(AWS);
 
 beforeEach(() => {
     expect.hasAssertions();

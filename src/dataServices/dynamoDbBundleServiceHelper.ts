@@ -81,7 +81,6 @@ export default class DynamoDbBundleServiceHelper {
                     }
                     if (id === undefined) {
                         id = uuidv4();
-                        console.warn(`No id in order to update the resource => create a new id.`);
                     }
                     const vid = (idToVersionId[id] || 0) + 1;
                     const Item = DynamoDbUtil.prepItemForDdbInsert(
