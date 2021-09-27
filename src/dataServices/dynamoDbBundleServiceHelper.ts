@@ -103,6 +103,7 @@ export default class DynamoDbBundleServiceHelper {
                         {
                             ...request.resource,
                             meta: { ...Item.meta },
+                            id,
                         },
                         request.tenantId,
                     );
