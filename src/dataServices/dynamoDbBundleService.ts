@@ -575,7 +575,6 @@ export class DynamoDbBundleService implements Bundle {
         let allLockedItems: ItemRequest[] = lockedItems;
         try {
             if (writeParams) {
-                console.log(JSON.stringify(writeParams));
                 await this.dynamoDb.transactWriteItems(writeParams).promise();
             }
 
