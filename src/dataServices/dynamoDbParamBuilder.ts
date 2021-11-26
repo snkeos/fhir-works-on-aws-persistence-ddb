@@ -14,6 +14,7 @@ import {
 import { DynamoDbUtil, DOCUMENT_STATUS_FIELD, LOCK_END_TS_FIELD } from './dynamoDbUtil';
 import DOCUMENT_STATUS from './documentStatus';
 import { BulkExportJob } from '../bulkExport/types';
+const AWSXRay = require('aws-xray-sdk');
 
 export default class DynamoDbParamBuilder {
     static LOCK_DURATION_IN_MS = 35 * 1000;
@@ -26,6 +27,8 @@ export default class DynamoDbParamBuilder {
         resourceType: string,
         tenantId?: string,
     ) {
+        const subsegment = AWSXRay.getSegment();
+        const newSubseg = subsegment.addNewSubsegment(`buildUpdateDocumentStatusParam`);
         let id = rid;
         const currentTs = Date.now();
         let futureEndTs = currentTs;
@@ -65,7 +68,7 @@ export default class DynamoDbParamBuilder {
                 ':resourceType': resourceType,
             });
         }
-
+        newSubseg.close()
         return params;
     }
 

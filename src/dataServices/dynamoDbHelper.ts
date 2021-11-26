@@ -9,6 +9,7 @@ import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 import { DynamoDBConverter } from './dynamoDb';
 import DOCUMENT_STATUS from './documentStatus';
 import { DOCUMENT_STATUS_FIELD, DynamoDbUtil } from './dynamoDbUtil';
+const AWSXRay = require('aws-xray-sdk');
 
 export default class DynamoDbHelper {
     private dynamoDb: DynamoDB;
@@ -56,8 +57,14 @@ export default class DynamoDbHelper {
         projectionExpression?: string,
         tenantId?: string,
     ): Promise<GenericResponse> {
+        const subsegment = AWSXRay.getSegment();
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResources`);
+
         let item = (await this.getMostRecentResources(resourceType, id, 1, projectionExpression, tenantId))[0];
+        newSubseg.close()
+        const cleanItemSubseg = subsegment.addNewSubsegment(` DynamoDbUtil.cleanItem`);
         item = DynamoDbUtil.cleanItem(item, projectionExpression);
+        cleanItemSubseg.close()
         return {
             message: 'Resource found',
             resource: item,
@@ -72,7 +79,11 @@ export default class DynamoDbHelper {
         id: string,
         tenantId?: string,
     ): Promise<GenericResponse> {
+        const subsegment = AWSXRay.getSegment();
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResources`);
         const items = await this.getMostRecentResources(resourceType, id, 2, undefined, tenantId);
+        newSubseg.close()
+        const cleanItemSubseg = subsegment.addNewSubsegment(` DynamoDbUtil.cleanItem`);
         const latestItemDocStatus: DOCUMENT_STATUS = <DOCUMENT_STATUS>items[0][DOCUMENT_STATUS_FIELD];
         if (latestItemDocStatus === DOCUMENT_STATUS.DELETED) {
             throw new ResourceNotFoundError(resourceType, id);
@@ -94,6 +105,7 @@ export default class DynamoDbHelper {
             throw new ResourceNotFoundError(resourceType, id);
         }
         item = DynamoDbUtil.cleanItem(item);
+        cleanItemSubseg.close();
         return {
             message: 'Resource found',
             resource: item,
