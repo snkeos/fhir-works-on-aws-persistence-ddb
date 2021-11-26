@@ -25,6 +25,9 @@ export default class DynamoDbHelper {
         projectionExpression?: string,
         tenantId?: string,
     ): Promise<ItemList> {
+        const subsegment = AWSXRay.getSegment();
+        const newSubseg = subsegment.addNewSubsegment(` DynamoDbParamBuilder.buildGetResourcesQueryParam`);
+
         const params = DynamoDbParamBuilder.buildGetResourcesQueryParam(
             id,
             resourceType,
@@ -32,6 +35,9 @@ export default class DynamoDbHelper {
             projectionExpression,
             tenantId,
         );
+        newSubseg.close()
+        const queryItemSubseg = subsegment.addNewSubsegment(` this.dynamoDb.query(params) +  DynamoDBConverter.unmarshall`);
+
         let result: any = {};
         try {
             result = await this.dynamoDb.query(params).promise();
@@ -39,6 +45,7 @@ export default class DynamoDbHelper {
             if (e.code === 'ConditionalCheckFailedException') {
                 throw new ResourceNotFoundError(resourceType, id);
             }
+            queryItemSubseg.close()
             throw e;
         }
 
@@ -46,8 +53,10 @@ export default class DynamoDbHelper {
             ? result.Items.map((ddbJsonItem: any) => DynamoDBConverter.unmarshall(ddbJsonItem))
             : [];
         if (items.length === 0) {
+            queryItemSubseg.close()
             throw new ResourceNotFoundError(resourceType, id);
         }
+        queryItemSubseg.close()
         return items;
     }
 
@@ -80,7 +89,7 @@ export default class DynamoDbHelper {
         tenantId?: string,
     ): Promise<GenericResponse> {
         const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResources`);
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentUserReadableResource`);
         const items = await this.getMostRecentResources(resourceType, id, 2, undefined, tenantId);
         newSubseg.close()
         const cleanItemSubseg = subsegment.addNewSubsegment(` DynamoDbUtil.cleanItem`);
