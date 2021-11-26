@@ -26,7 +26,7 @@ export default class DynamoDbHelper {
         tenantId?: string,
     ): Promise<ItemList> {
         const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(` DynamoDbParamBuilder.buildGetResourcesQueryParam`);
+        const newSubseg = subsegment.addNewSubsegment(`DynamoDbParamBuilder.buildGetResourcesQueryParam`);
 
         const params = DynamoDbParamBuilder.buildGetResourcesQueryParam(
             id,
@@ -35,8 +35,7 @@ export default class DynamoDbHelper {
             projectionExpression,
             tenantId,
         );
-        newSubseg.close()
-        const queryItemSubseg = subsegment.addNewSubsegment(` this.dynamoDb.query(params) +  DynamoDBConverter.unmarshall`);
+        newSubseg.close() 
 
         let result: any = {};
         try {
@@ -45,10 +44,9 @@ export default class DynamoDbHelper {
             if (e.code === 'ConditionalCheckFailedException') {
                 throw new ResourceNotFoundError(resourceType, id);
             }
-            queryItemSubseg.close()
             throw e;
         }
-
+        const queryItemSubseg = subsegment.addNewSubsegment(`DynamoDBConverter.unmarshall(ddbJsonItem)`);
         const items = result.Items
             ? result.Items.map((ddbJsonItem: any) => DynamoDBConverter.unmarshall(ddbJsonItem))
             : [];
