@@ -26,8 +26,7 @@ export default class DynamoDbHelper {
         tenantId?: string,
     ): Promise<ItemList> {
         const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(`DynamoDbParamBuilder.buildGetResourcesQueryParam`);
-
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResources.DynamoDbParamBuilder.buildGetResourcesQueryParam`);
         const params = DynamoDbParamBuilder.buildGetResourcesQueryParam(
             id,
             resourceType,
@@ -35,8 +34,9 @@ export default class DynamoDbHelper {
             projectionExpression,
             tenantId,
         );
-        newSubseg.close() 
+        newSubseg.close();
 
+        const newSubseg2 = subsegment.addNewSubsegment(`getMostRecentResources.DynamoDb.query`);
         let result: any = {};
         try {
             result = await this.dynamoDb.query(params).promise();
@@ -46,15 +46,17 @@ export default class DynamoDbHelper {
             }
             throw e;
         }
-        const queryItemSubseg = subsegment.addNewSubsegment(`DynamoDBConverter.unmarshall(ddbJsonItem)`);
+        newSubseg2.close();
+
+        const newSubseg3 = subsegment.addNewSubsegment(`getMostRecentResources.DynamoDBConverter.unmarshall(ddbJsonItem)`);
         const items = result.Items
             ? result.Items.map((ddbJsonItem: any) => DynamoDBConverter.unmarshall(ddbJsonItem))
             : [];
         if (items.length === 0) {
-            queryItemSubseg.close()
+            newSubseg3.close();
             throw new ResourceNotFoundError(resourceType, id);
         }
-        queryItemSubseg.close()
+        newSubseg3.close();
         return items;
     }
 
@@ -65,13 +67,13 @@ export default class DynamoDbHelper {
         tenantId?: string,
     ): Promise<GenericResponse> {
         const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResources`);
-
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentResource.getMostRecentResources`);
         let item = (await this.getMostRecentResources(resourceType, id, 1, projectionExpression, tenantId))[0];
-        newSubseg.close()
-        const cleanItemSubseg = subsegment.addNewSubsegment(` DynamoDbUtil.cleanItem`);
+        newSubseg.close();
+
+        const newSubseg2 = subsegment.addNewSubsegment(`getMostRecentResource.clean`);
         item = DynamoDbUtil.cleanItem(item, projectionExpression);
-        cleanItemSubseg.close()
+        newSubseg2.close();
         return {
             message: 'Resource found',
             resource: item,
@@ -87,10 +89,11 @@ export default class DynamoDbHelper {
         tenantId?: string,
     ): Promise<GenericResponse> {
         const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(`getMostRecentUserReadableResource`);
+        const newSubseg = subsegment.addNewSubsegment(`getMostRecentUserReadableResource.getMostRecentResources`);
         const items = await this.getMostRecentResources(resourceType, id, 2, undefined, tenantId);
-        newSubseg.close()
-        const cleanItemSubseg = subsegment.addNewSubsegment(` DynamoDbUtil.cleanItem`);
+        newSubseg.close();
+
+        const newSubseg2 = subsegment.addNewSubsegment(`getMostRecentUserReadableResource.select&clean`);
         const latestItemDocStatus: DOCUMENT_STATUS = <DOCUMENT_STATUS>items[0][DOCUMENT_STATUS_FIELD];
         if (latestItemDocStatus === DOCUMENT_STATUS.DELETED) {
             throw new ResourceNotFoundError(resourceType, id);
@@ -112,7 +115,7 @@ export default class DynamoDbHelper {
             throw new ResourceNotFoundError(resourceType, id);
         }
         item = DynamoDbUtil.cleanItem(item);
-        cleanItemSubseg.close();
+        newSubseg2.close();
         return {
             message: 'Resource found',
             resource: item,
