@@ -108,8 +108,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async createResource(request: CreateResourceRequest) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`createResource`);
         const { resourceType, resource, tenantId } = request;
-        return this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
+        const result = this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
+        newSubseg.close();
+        return result;
     }
 
     private async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
