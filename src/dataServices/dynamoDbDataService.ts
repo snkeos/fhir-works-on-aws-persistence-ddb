@@ -38,6 +38,7 @@ import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 import DynamoDbHelper from './dynamoDbHelper';
 import { getBulkExportResults, startJobExecution } from '../bulkExport/bulkExport';
 import { BulkExportJob } from '../bulkExport/types';
+const AWSXRay = require('aws-xray-sdk');
 
 const buildExportJob = (initiateExportRequest: InitiateExportRequest): BulkExportJob => {
     const initialStatus: ExportJobStatus = 'in-progress';
@@ -76,14 +77,18 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
-        return this.dynamoDbHelper.getMostRecentUserReadableResource(
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`readResource`);
+        const result = this.dynamoDbHelper.getMostRecentUserReadableResource(
             request.resourceType,
             request.id,
             request.tenantId,
         );
+        newSubseg.close();
+        return result;
     }
 
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`vReadResource`);
         const { resourceType, id, vid, tenantId } = request;
         const params = DynamoDbParamBuilder.buildGetItemParam(id, parseInt(vid, 10), tenantId);
         const result = await this.dynamoDb.getItem(params).promise();
@@ -95,6 +100,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             throw new ResourceVersionNotFoundError(resourceType, id, vid);
         }
         item = DynamoDbUtil.cleanItem(item);
+        newSubseg.close();
         return {
             message: 'Resource found',
             resource: item,
@@ -107,6 +113,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     private async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`createResourceWithId`);
         const regex = new RegExp('^[a-zA-Z0-9-.]{1,64}$');
         if (!regex.test(resourceId)) {
             throw new InvalidResourceError(`Resource creation failed, id ${resourceId} is not valid`);
@@ -128,6 +135,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
         const item = DynamoDBConverter.unmarshall(param.Item);
         resourceClone = DynamoDbUtil.cleanItem(item);
+        newSubseg.close();
         return {
             success: true,
             message: 'Resource created',
@@ -136,15 +144,19 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async deleteResource(request: DeleteResourceRequest) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`deleteResource`);
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.readResource({ resourceType, id, tenantId });
 
         const { versionId } = itemServiceResponse.resource.meta;
 
-        return this.deleteVersionedResource(resourceType, id, parseInt(versionId, 10), tenantId);
+        const result = this.deleteVersionedResource(resourceType, id, parseInt(versionId, 10), tenantId);
+        newSubseg.close();
+        return result;
     }
 
     async deleteVersionedResource(resourceType: string, id: string, vid: number, tenantId?: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`deleteVersionedResource`);
         const updateStatusToDeletedParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
             DOCUMENT_STATUS.AVAILABLE,
             DOCUMENT_STATUS.DELETED,
@@ -154,6 +166,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             tenantId,
         ).Update;
         await this.dynamoDb.updateItem(updateStatusToDeletedParam).promise();
+        newSubseg.close();
         return {
             success: true,
             message: `Successfully deleted ResourceType: ${resourceType}, Id: ${id}, VersionId: ${vid}`,
@@ -161,6 +174,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async updateResource(request: UpdateResourceRequest) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`updateResource`);
         const { resource, resourceType, id, tenantId } = request;
         try {
             // Will throw ResourceNotFoundError if resource can't be found
@@ -188,6 +202,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         });
         const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
         resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
+        newSubseg.close();
         return {
             success: true,
             message: 'Resource updated',
@@ -196,6 +211,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async initiateExport(initiateExportRequest: InitiateExportRequest): Promise<string> {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`initiateExport`);
         await this.throttleExportRequestsIfNeeded(initiateExportRequest.requesterUserId);
         // Create new export job
         const exportJob: BulkExportJob = buildExportJob(initiateExportRequest);
@@ -204,10 +220,12 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
 
         const params = DynamoDbParamBuilder.buildPutCreateExportRequest(exportJob);
         await this.dynamoDb.putItem(params).promise();
+        newSubseg.close();
         return exportJob.jobId;
     }
 
     async throttleExportRequestsIfNeeded(requesterUserId: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`throttleExportRequestsIfNeeded`);
         const jobStatusesToThrottle: ExportJobStatus[] = ['canceling', 'in-progress'];
         const exportJobItems = await this.getJobsWithExportStatuses(jobStatusesToThrottle);
 
@@ -222,9 +240,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
                 throw new TooManyConcurrentExportRequestsError();
             }
         }
+        newSubseg.close();
     }
 
     async getJobsWithExportStatuses(jobStatuses: ExportJobStatus[]): Promise<ItemList> {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`getJobsWithExportStatuses`);
         const jobStatusPromises = jobStatuses.map((jobStatus: ExportJobStatus) => {
             const projectionExpression = 'jobOwnerId, jobStatus';
             const queryJobStatusParam = DynamoDbParamBuilder.buildQueryExportRequestJobStatus(
@@ -241,10 +261,12 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
                 allJobStatusItems = allJobStatusItems.concat(jobStatusResponse.Items);
             }
         });
+        newSubseg.close();
         return allJobStatusItems;
     }
 
     async cancelExport(jobId: string): Promise<void> {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`cancelExport`);
         const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId);
         const jobDetailsResponse = await this.dynamoDb.getItem(jobDetailsParam).promise();
         if (!jobDetailsResponse.Item) {
@@ -256,14 +278,17 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
         // A job in the canceled or canceling state doesn't need to be updated to 'canceling'
         if (['canceled', 'canceling'].includes(jobItem.jobStatus)) {
+            newSubseg.close();
             return;
         }
 
         const params = DynamoDbParamBuilder.buildUpdateExportRequestJobStatus(jobId, 'canceling');
         await this.dynamoDb.updateItem(params).promise();
+        newSubseg.close();
     }
 
     async getExportStatus(jobId: string): Promise<GetExportStatusResponse> {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`getExportStatus`);
         const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId);
         const jobDetailsResponse = await this.dynamoDb.getItem(jobDetailsParam).promise();
         if (!jobDetailsResponse.Item) {
@@ -300,7 +325,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             errorArray,
             errorMessage,
         };
-
+        newSubseg.close();
         return getExportStatusResponse;
     }
 

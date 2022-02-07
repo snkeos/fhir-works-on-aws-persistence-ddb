@@ -69,7 +69,7 @@ export default class DynamoDbParamBuilder {
                 ':resourceType': resourceType,
             });
         }
-        newSubseg.close()
+        newSubseg.close();
         return params;
     }
 
@@ -80,6 +80,7 @@ export default class DynamoDbParamBuilder {
         projectionExpression?: string,
         tenantId?: string,
     ) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetResourcesQueryParam`);
         let id = rid;
         if (tenantId !== undefined) {
             id += tenantId;
@@ -109,10 +110,12 @@ export default class DynamoDbParamBuilder {
             // @ts-ignore
             params.ProjectionExpression = projectionExpression;
         }
+        newSubseg.close();
         return params;
     }
 
     static buildDeleteParam(rid: string, vid: number, tenantId?: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildDeleteParam`);
         let id = rid;
         if (tenantId !== undefined) {
             id += tenantId;
@@ -126,19 +129,22 @@ export default class DynamoDbParamBuilder {
                 }),
             },
         };
-
+        newSubseg.close();
         return params;
     }
 
     static buildGetItemParam(rid: string, vid: number, tenantId?: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetItemParam`);
         const id = DynamoDbUtil.buildItemId(rid, tenantId);
-        return {
+        const param = {
             TableName: RESOURCE_TABLE,
             Key: DynamoDBConverter.marshall({
                 id,
                 vid,
             }),
         };
+        newSubseg.close();
+        return param;
     }
 
     /**
@@ -154,6 +160,7 @@ export default class DynamoDbParamBuilder {
         allowOverwriteId: boolean = false,
         tenantId?: string,
     ) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildPutAvailableItemParam`);
         const newItem = DynamoDbUtil.prepItemForDdbInsert(item, id, vid, DOCUMENT_STATUS.AVAILABLE, tenantId);
         const param: any = {
             TableName: RESOURCE_TABLE,
@@ -163,17 +170,22 @@ export default class DynamoDbParamBuilder {
         if (!allowOverwriteId) {
             param.ConditionExpression = 'attribute_not_exists(id)';
         }
+        newSubseg.close();
         return param;
     }
 
     static buildPutCreateExportRequest(bulkExportJob: BulkExportJob) {
-        return {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildPutCreateExportRequest`);
+        const param = {
             TableName: EXPORT_REQUEST_TABLE,
             Item: DynamoDBConverter.marshall(bulkExportJob),
         };
+        newSubseg.close();
+        return param;
     }
 
     static buildQueryExportRequestJobStatus(jobStatus: ExportJobStatus, projectionExpression?: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildQueryExportRequestJobStatus`);
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             KeyConditionExpression: 'jobStatus = :hkey',
@@ -187,11 +199,12 @@ export default class DynamoDbParamBuilder {
             // @ts-ignore
             params.ProjectionExpression = projectionExpression;
         }
-
+        newSubseg.close();
         return params;
     }
 
     static buildUpdateExportRequestJobStatus(jobId: string, jobStatus: ExportJobStatus) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildUpdateExportRequestJobStatus`);
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             Key: DynamoDBConverter.marshall({
@@ -204,18 +217,19 @@ export default class DynamoDbParamBuilder {
                 ':jobIdVal': jobId,
             }),
         };
-
+        newSubseg.close();
         return params;
     }
 
     static buildGetExportRequestJob(jobId: string) {
+        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetExportRequestJob`);
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             Key: DynamoDBConverter.marshall({
                 jobId,
             }),
         };
-
+        newSubseg.close();
         return params;
     }
 }
