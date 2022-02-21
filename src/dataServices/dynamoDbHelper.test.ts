@@ -32,7 +32,7 @@ resource[DOCUMENT_STATUS_FIELD] = DOCUMENT_STATUS.AVAILABLE;
 const tidresource = resource;
 tidresource[TENANT_ID_FIELD] = testTenantId;
 
-tidresource.id += testTenantId;
+tidresource.id = `${testTenantId}|${tidresource.id}`;
 
 function getExpectedResponse(res: any, versionId: string, tenantId?: string) {
     let expectedResource: any = cloneDeep(res);
@@ -53,8 +53,8 @@ describe('getMostRecentResource', () => {
         resourceData: any,
         rType: string,
         rId: string,
-        tenantId?: string,
         projectionExpression?: string,
+        tenantId?: string,
     ) => {
         // READ items (Success)
         AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
