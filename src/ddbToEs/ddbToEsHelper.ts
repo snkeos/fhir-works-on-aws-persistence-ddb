@@ -8,81 +8,69 @@
 import { Client } from '@elastic/elasticsearch';
 // @ts-ignore
 import { AmazonConnection, AmazonTransport } from 'aws-elasticsearch-connector';
+import { uniqWith, isEqual, partition, groupBy, zipObject } from 'lodash';
 import AWS from '../AWS';
 import ESBulkCommand, { OperationType } from './ESBulkCommand';
 import { DOCUMENT_STATUS_FIELD } from '../dataServices/dynamoDbUtil';
 import DOCUMENT_STATUS from '../dataServices/documentStatus';
 import getComponentLogger from '../loggerBuilder';
 
+const REMOVE = 'REMOVE';
+const DELETED = 'DELETED';
+
 const logger = getComponentLogger();
 
 const { IS_OFFLINE, ELASTICSEARCH_DOMAIN_ENDPOINT } = process.env;
 
-const ALIAS_SUFFIX = '-alias';
+const formatDocument = (ddbImage: any): any => {
+    // eslint-disable-next-line no-underscore-dangle
+    if (ddbImage._tenantId) {
+        return {
+            ...ddbImage,
+            // eslint-disable-next-line no-underscore-dangle
+            id: ddbImage._id, // use the original resourceId as id instead of the DDB composite id
+            _id: undefined, // _id is a reserved field in ES, so it must be removed.
+        };
+    }
+    return ddbImage;
+};
+
+const getDefaultESClientFromEnvVars: () => Client = () => {
+    let ES_DOMAIN_ENDPOINT = ELASTICSEARCH_DOMAIN_ENDPOINT || 'https://fake-es-endpoint.com';
+    if (IS_OFFLINE === 'true') {
+        const { ACCESS_KEY, SECRET_KEY, AWS_REGION, OFFLINE_ELASTICSEARCH_DOMAIN_ENDPOINT } = process.env;
+
+        AWS.config.update({
+            region: AWS_REGION || 'us-west-2',
+            accessKeyId: ACCESS_KEY,
+            secretAccessKey: SECRET_KEY,
+        });
+        ES_DOMAIN_ENDPOINT = OFFLINE_ELASTICSEARCH_DOMAIN_ENDPOINT || 'https://fake-es-endpoint.com';
+    }
+
+    return new Client({
+        node: ES_DOMAIN_ENDPOINT,
+        Connection: AmazonConnection,
+        Transport: AmazonTransport,
+    });
+};
 
 export default class DdbToEsHelper {
     public ElasticSearch: Client;
 
-    constructor() {
-        let ES_DOMAIN_ENDPOINT = ELASTICSEARCH_DOMAIN_ENDPOINT || 'https://fake-es-endpoint.com';
-        if (IS_OFFLINE === 'true') {
-            const { ACCESS_KEY, SECRET_KEY, AWS_REGION, OFFLINE_ELASTICSEARCH_DOMAIN_ENDPOINT } = process.env;
-
-            AWS.config.update({
-                region: AWS_REGION || 'us-west-2',
-                accessKeyId: ACCESS_KEY,
-                secretAccessKey: SECRET_KEY,
-            });
-            ES_DOMAIN_ENDPOINT = OFFLINE_ELASTICSEARCH_DOMAIN_ENDPOINT || 'https://fake-es-endpoint.com';
-        }
-
-        this.ElasticSearch = new Client({
-            node: ES_DOMAIN_ENDPOINT,
-            Connection: AmazonConnection,
-            Transport: AmazonTransport,
-        });
+    constructor({ esClient = getDefaultESClientFromEnvVars() }: { esClient?: Client } = {}) {
+        this.ElasticSearch = esClient;
     }
 
-    // eslint-disable-next-line class-methods-use-this
-    createPropertyIndexes(includeTenantId: boolean) {
-        const properties = {
-            id: {
-                type: 'keyword',
-                index: true,
-            },
-            resourceType: {
-                type: 'keyword',
-                index: true,
-            },
-            _references: {
-                type: 'keyword',
-                index: true,
-            },
-            documentStatus: {
-                type: 'keyword',
-                index: true,
-            },
-        };
-        if (includeTenantId) {
-            return {
-                ...properties,
-                tenantId: {
-                    type: 'keyword',
-                    index: true,
-                },
-            };
-        }
-        return properties;
-    }
-
-    async createIndexAndAliasIfNotExist(resourceTypes: Set<string>, includeTenantId: boolean) {
-        if (resourceTypes.size === 0) {
+    // async createIndexAndAliasIfNotExist(resourceTypes: Set<string>) {
+    async createIndexAndAliasIfNotExist(aliases: { alias: string; index: string }[]) {
+        if (aliases.length === 0) {
             return;
         }
 
-        const listOfAliases = Array.from(resourceTypes).map((resourceType: string) => {
-            return this.generateAlias(resourceType);
-        });
+        const uniqAliases = uniqWith(aliases, isEqual);
+        const listOfAliases = uniqAliases.map((x) => x.alias);
+
         const { body: allFound } = await this.ElasticSearch.indices.existsAlias({
             name: listOfAliases,
             expand_wildcards: 'all',
@@ -94,79 +82,99 @@ export default class DdbToEsHelper {
 
         logger.debug('There are missing aliases');
 
-        const indicesToCreate: Set<string> = new Set(resourceTypes);
-        const aliasesToCreate: Set<string> = new Set(listOfAliases);
+        const existingIndices: Set<string> = new Set();
+        const existingAliases: Set<string> = new Set();
 
         const { body: indices } = await this.ElasticSearch.indices.getAlias();
-        // for each index and alias found remove from set
         Object.entries(indices).forEach(([indexName, indexBody]) => {
-            indicesToCreate.delete(indexName);
+            existingIndices.add(indexName);
             Object.keys((indexBody as any).aliases).forEach((alias: string) => {
-                aliasesToCreate.delete(alias);
+                existingAliases.add(alias);
             });
         });
+
+        const missingAliases = uniqAliases.filter((x) => !existingAliases.has(x.alias));
+
+        const [aliasesWithExistingIndex, aliasesWithMissingIndex] = partition(missingAliases, (x) =>
+            existingIndices.has(x.index),
+        );
+
         try {
             const promises: any[] = [];
-            Array.from(indicesToCreate).forEach((index: string) => {
-                const alias = this.generateAlias(index);
-                // Only create index when we also need to create an alias
-                if (aliasesToCreate.has(alias)) {
-                    aliasesToCreate.delete(alias);
-                    logger.info(`create index ${index} & alias ${alias}`);
-                    const params = {
-                        index,
-                        body: {
-                            mappings: {
-                                properties: this.createPropertyIndexes(includeTenantId),
-                            },
-                            aliases: { [alias]: {} },
-                        },
-                    };
-                    promises.push(this.ElasticSearch.indices.create(params));
-                }
-            });
+            const aliasesByIndex = groupBy(aliasesWithMissingIndex, 'index');
 
-            Array.from(aliasesToCreate).forEach((alias: string) => {
+            Object.entries(aliasesByIndex).forEach(([index, aliasesForIndex]) => {
+                const aliasesNames = aliasesForIndex.map((x) => x.alias);
+
+                const aliasesArg = zipObject(aliasesNames, new Array(aliasesNames.length).fill({}));
+
+                logger.info(`create index ${index} & aliases ${aliasesNames}`);
+                const params = {
+                    index,
+                    body: {
+                        mappings: {
+                            properties: {
+                                id: {
+                                    type: 'keyword',
+                                    index: true,
+                                },
+                                resourceType: {
+                                    type: 'keyword',
+                                    index: true,
+                                },
+                                _references: {
+                                    type: 'keyword',
+                                    index: true,
+                                },
+                                documentStatus: {
+                                    type: 'keyword',
+                                    index: true,
+                                },
+                                _tenantId: {
+                                    type: 'keyword',
+                                    index: true,
+                                },
+                            },
+                        },
+                        aliases: aliasesArg,
+                    },
+                };
+                promises.push(this.ElasticSearch.indices.create(params));
+            });
+            aliasesWithExistingIndex.forEach((alias) => {
                 // Create Alias; this block is creating aliases for existing indices
-                logger.info(`create alias ${alias}`);
+                logger.info(`create alias ${alias.alias} for index ${alias.index}`);
                 promises.push(
                     this.ElasticSearch.indices.putAlias({
-                        index: this.getResourceType(alias),
-                        name: alias,
+                        index: alias.index,
+                        name: alias.alias,
                     }),
                 );
             });
 
             await Promise.all(promises);
         } catch (error) {
-            logger.error(`Failed to create indices and aliases. Resource types: ${resourceTypes} were examined`);
+            logger.error(`Failed to create indices and aliases:`, aliases);
             throw error;
         }
     }
 
     // eslint-disable-next-line class-methods-use-this
-    private generateFullId(id: string, vid: number) {
+    private generateFullId(ddbImage: any) {
+        const { id, vid, _tenantId, _id } = ddbImage;
+        if (_tenantId) {
+            return `${_tenantId}_${_id}_${vid}`;
+        }
         return `${id}_${vid}`;
     }
 
-    // eslint-disable-next-line class-methods-use-this
-    private generateAlias(resourceType: string) {
-        return `${resourceType.toLowerCase()}${ALIAS_SUFFIX}`;
-    }
-
-    // eslint-disable-next-line class-methods-use-this
-    private getResourceType(alias: string) {
-        return alias.substring(0, alias.length - ALIAS_SUFFIX.length);
-    }
-
     // Getting promise params for actual deletion of the record from ES
-    createBulkESDelete(ddbResourceImage: any): ESBulkCommand {
-        const { id, vid } = ddbResourceImage;
-        const compositeId = this.generateFullId(id, vid);
+    createBulkESDelete(ddbResourceImage: any, alias: string): ESBulkCommand {
+        const compositeId = this.generateFullId(ddbResourceImage);
         return {
             bulkCommand: [
                 {
-                    delete: { _index: this.generateAlias(ddbResourceImage.resourceType), _id: compositeId },
+                    delete: { _index: alias, _id: compositeId },
                 },
             ],
             id: compositeId,
@@ -175,7 +183,7 @@ export default class DdbToEsHelper {
     }
 
     // Getting promise params for inserting a new record or editing a record
-    createBulkESUpsert(newImage: any): ESBulkCommand | null {
+    createBulkESUpsert(newImage: any, alias: string): ESBulkCommand | null {
         // We only perform operations on records with documentStatus === AVAILABLE || DELETED
         if (
             newImage[DOCUMENT_STATUS_FIELD] !== DOCUMENT_STATUS.AVAILABLE &&
@@ -188,13 +196,12 @@ export default class DdbToEsHelper {
         if (newImage[DOCUMENT_STATUS_FIELD] === DOCUMENT_STATUS.AVAILABLE) {
             type = 'upsert-AVAILABLE';
         }
-        const { id, vid } = newImage;
-        const compositeId = this.generateFullId(id, vid);
+        const compositeId = this.generateFullId(newImage);
         return {
             id: compositeId,
             bulkCommand: [
-                { update: { _index: this.generateAlias(newImage.resourceType), _id: compositeId } },
-                { doc: newImage, doc_as_upsert: true },
+                { update: { _index: alias, _id: compositeId } },
+                { doc: formatDocument(newImage), doc_as_upsert: true },
             ],
             type,
         };
@@ -208,7 +215,7 @@ export default class DdbToEsHelper {
         if (bulkCmds.length === 0) {
             return;
         }
-        const listOfIds = cmds.map(cmd => {
+        const listOfIds = cmds.map((cmd) => {
             return cmd.id;
         });
         logger.info(`Starting bulk sync operation on ids: `, listOfIds);
@@ -240,5 +247,13 @@ export default class DdbToEsHelper {
             logger.error(`Bulk sync operation failed on ids: `, listOfIds);
             throw error;
         }
+    }
+
+    // eslint-disable-next-line class-methods-use-this
+    isRemoveResource(record: any): boolean {
+        if (record.eventName === REMOVE) {
+            return true;
+        }
+        return record.dynamodb.NewImage.documentStatus.S === DELETED && process.env.ENABLE_ES_HARD_DELETE === 'true';
     }
 }

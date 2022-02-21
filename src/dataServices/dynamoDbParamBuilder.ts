@@ -3,19 +3,18 @@
  *  SPDX-License-Identifier: Apache-2.0
  */
 
-import { ExportJobStatus } from 'fhir-works-on-aws-interface';
-import { pickBy } from 'lodash';
+import { ExportJobStatus, InitiateExportRequest } from 'fhir-works-on-aws-interface';
 import {
     DynamoDBConverter,
-    RESOURCE_TABLE,
     EXPORT_REQUEST_TABLE,
     EXPORT_REQUEST_TABLE_JOB_STATUS_INDEX,
+    RESOURCE_TABLE,
 } from './dynamoDb';
-import { DynamoDbUtil, DOCUMENT_STATUS_FIELD, LOCK_END_TS_FIELD } from './dynamoDbUtil';
+import { buildHashKey, DOCUMENT_STATUS_FIELD, DynamoDbUtil, LOCK_END_TS_FIELD } from './dynamoDbUtil';
 import DOCUMENT_STATUS from './documentStatus';
 import { BulkExportJob } from '../bulkExport/types';
 
-const AWSXRay = require('aws-xray-sdk');
+const EXPORT_INTERNAL_ID_FIELD = '_jobId';
 
 export default class DynamoDbParamBuilder {
     static LOCK_DURATION_IN_MS = 35 * 1000;
@@ -23,27 +22,22 @@ export default class DynamoDbParamBuilder {
     static buildUpdateDocumentStatusParam(
         oldStatus: DOCUMENT_STATUS | null,
         newStatus: DOCUMENT_STATUS,
-        rid: string,
+        id: string,
         vid: number,
         resourceType: string,
         tenantId?: string,
     ) {
-        const subsegment = AWSXRay.getSegment();
-        const newSubseg = subsegment.addNewSubsegment(`buildUpdateDocumentStatusParam`);
-        let id = rid;
         const currentTs = Date.now();
         let futureEndTs = currentTs;
         if (newStatus === DOCUMENT_STATUS.LOCKED) {
             futureEndTs = currentTs + this.LOCK_DURATION_IN_MS;
         }
-        if (tenantId !== undefined) {
-            id += tenantId;
-        }
+
         const params: any = {
             Update: {
                 TableName: RESOURCE_TABLE,
                 Key: DynamoDBConverter.marshall({
-                    id,
+                    id: buildHashKey(id, tenantId),
                     vid,
                 }),
                 UpdateExpression: `set ${DOCUMENT_STATUS_FIELD} = :newStatus, ${LOCK_END_TS_FIELD} = :futureEndTs`,
@@ -69,82 +63,59 @@ export default class DynamoDbParamBuilder {
                 ':resourceType': resourceType,
             });
         }
-        newSubseg.close();
+
         return params;
     }
 
     static buildGetResourcesQueryParam(
-        rid: string,
+        id: string,
         resourceType: string,
         maxNumberOfVersions: number,
         projectionExpression?: string,
         tenantId?: string,
     ) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetResourcesQueryParam`);
-        let id = rid;
-        if (tenantId !== undefined) {
-            id += tenantId;
-        }
-
         const params: any = {
             TableName: RESOURCE_TABLE,
             ScanIndexForward: false,
             Limit: maxNumberOfVersions,
-            FilterExpression: tenantId === undefined ? '#r = :resourceType' : '#r = :resourceType and #t = :tenantId',
+            FilterExpression: '#r = :resourceType',
             KeyConditionExpression: 'id = :hkey',
-            ExpressionAttributeNames:
-                tenantId === undefined ? { '#r': 'resourceType' } : { '#r': 'resourceType', '#t': 'tenantId' },
-            ExpressionAttributeValues: DynamoDBConverter.marshall(
-                pickBy(
-                    {
-                        ':hkey': id,
-                        ':resourceType': resourceType,
-                        ':tenantId': tenantId,
-                    },
-                    v => v !== undefined,
-                ),
-            ),
+            ExpressionAttributeNames: { '#r': 'resourceType' },
+            ExpressionAttributeValues: DynamoDBConverter.marshall({
+                ':hkey': buildHashKey(id, tenantId),
+                ':resourceType': resourceType,
+            }),
         };
 
         if (projectionExpression) {
             // @ts-ignore
             params.ProjectionExpression = projectionExpression;
         }
-        newSubseg.close();
         return params;
     }
 
-    static buildDeleteParam(rid: string, vid: number, tenantId?: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildDeleteParam`);
-        let id = rid;
-        if (tenantId !== undefined) {
-            id += tenantId;
-        }
+    static buildDeleteParam(id: string, vid: number, tenantId?: string) {
         const params: any = {
             Delete: {
                 TableName: RESOURCE_TABLE,
                 Key: DynamoDBConverter.marshall({
-                    id,
+                    id: buildHashKey(id, tenantId),
                     vid,
                 }),
             },
         };
-        newSubseg.close();
+
         return params;
     }
 
-    static buildGetItemParam(rid: string, vid: number, tenantId?: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetItemParam`);
-        const id = DynamoDbUtil.buildItemId(rid, tenantId);
-        const param = {
+    static buildGetItemParam(id: string, vid: number, tenantId?: string) {
+        return {
             TableName: RESOURCE_TABLE,
             Key: DynamoDBConverter.marshall({
-                id,
+                id: buildHashKey(id, tenantId),
                 vid,
             }),
         };
-        newSubseg.close();
-        return param;
     }
 
     /**
@@ -160,7 +131,6 @@ export default class DynamoDbParamBuilder {
         allowOverwriteId: boolean = false,
         tenantId?: string,
     ) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildPutAvailableItemParam`);
         const newItem = DynamoDbUtil.prepItemForDdbInsert(item, id, vid, DOCUMENT_STATUS.AVAILABLE, tenantId);
         const param: any = {
             TableName: RESOURCE_TABLE,
@@ -170,22 +140,28 @@ export default class DynamoDbParamBuilder {
         if (!allowOverwriteId) {
             param.ConditionExpression = 'attribute_not_exists(id)';
         }
-        newSubseg.close();
         return param;
     }
 
-    static buildPutCreateExportRequest(bulkExportJob: BulkExportJob) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildPutCreateExportRequest`);
-        const param = {
+    static buildPutCreateExportRequest(bulkExportJob: BulkExportJob, initiateExportRequest: InitiateExportRequest) {
+        const newItem: any = { ...bulkExportJob };
+        if (newItem.tenantId) {
+            newItem[EXPORT_INTERNAL_ID_FIELD] = newItem.jobId;
+            newItem.jobId = buildHashKey(newItem.jobId, newItem.tenantId);
+        }
+        // Remove fields not needed
+        delete newItem.serverUrl;
+        delete newItem.fhirVersion;
+        delete newItem.allowedResourceTypes;
+        // Set type back to user input value
+        newItem.type = initiateExportRequest.type ?? '';
+        return {
             TableName: EXPORT_REQUEST_TABLE,
-            Item: DynamoDBConverter.marshall(bulkExportJob),
+            Item: DynamoDBConverter.marshall(newItem),
         };
-        newSubseg.close();
-        return param;
     }
 
     static buildQueryExportRequestJobStatus(jobStatus: ExportJobStatus, projectionExpression?: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildQueryExportRequestJobStatus`);
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             KeyConditionExpression: 'jobStatus = :hkey',
@@ -199,37 +175,36 @@ export default class DynamoDbParamBuilder {
             // @ts-ignore
             params.ProjectionExpression = projectionExpression;
         }
-        newSubseg.close();
+
         return params;
     }
 
-    static buildUpdateExportRequestJobStatus(jobId: string, jobStatus: ExportJobStatus) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildUpdateExportRequestJobStatus`);
+    static buildUpdateExportRequestJobStatus(jobId: string, jobStatus: ExportJobStatus, tenantId?: string) {
+        const hashKey = buildHashKey(jobId, tenantId);
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             Key: DynamoDBConverter.marshall({
-                jobId,
+                jobId: hashKey,
             }),
             UpdateExpression: 'set jobStatus = :newStatus',
             ConditionExpression: 'jobId = :jobIdVal',
             ExpressionAttributeValues: DynamoDBConverter.marshall({
                 ':newStatus': jobStatus,
-                ':jobIdVal': jobId,
+                ':jobIdVal': hashKey,
             }),
         };
-        newSubseg.close();
+
         return params;
     }
 
-    static buildGetExportRequestJob(jobId: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`buildGetExportRequestJob`);
+    static buildGetExportRequestJob(jobId: string, tenantId?: string) {
         const params = {
             TableName: EXPORT_REQUEST_TABLE,
             Key: DynamoDBConverter.marshall({
-                jobId,
+                jobId: buildHashKey(jobId, tenantId),
             }),
         };
-        newSubseg.close();
+
         return params;
     }
 }

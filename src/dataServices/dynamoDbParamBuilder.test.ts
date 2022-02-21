@@ -4,9 +4,11 @@
  */
 
 import { cloneDeep } from 'lodash';
+import { InitiateExportRequest } from 'fhir-works-on-aws-interface';
 import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 import DOCUMENT_STATUS from './documentStatus';
 import { timeFromEpochInMsRegExp, utcTimeRegExp } from '../../testUtilities/regExpressions';
+import { BulkExportJob } from '../bulkExport/types';
 
 describe('buildUpdateDocumentStatusParam', () => {
     const resourceType = 'Patient';
@@ -147,11 +149,32 @@ describe('buildUpdateDocumentStatusParam', () => {
         expect(futureTs).toBeGreaterThanOrEqual(currentTs - wiggleRoomInMs);
         expect(actualParam).toEqual(getExpectedParamForUpdateWithoutOldStatus(DOCUMENT_STATUS.AVAILABLE, id, vid));
     });
+
+    test('tenantId present', () => {
+        const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
+        const vid = 1;
+        const actualParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
+            null,
+            DOCUMENT_STATUS.AVAILABLE,
+            id,
+            vid,
+            resourceType,
+            'tenant1',
+        );
+        const expected = getExpectedParamForUpdateWithoutOldStatus(DOCUMENT_STATUS.AVAILABLE, id, vid);
+        expected.Update.Key = {
+            ...expected.Update.Key,
+            id: {
+                S: 'tenant1|8cafa46d-08b4-4ee4-b51b-803e20ae8126',
+            },
+        };
+
+        expect(actualParam).toEqual(expected);
+    });
 });
 
 describe('buildPutAvailableItemParam', () => {
     const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
-    const tenantId = '111111-aaaa-2222-bbb-33333344444';
     const vid = 1;
     const item = {
         resourceType: 'Patient',
@@ -237,24 +260,22 @@ describe('buildPutAvailableItemParam', () => {
         expect(actualParams).toEqual(clonedExpectedParams);
     });
 
-    const tenantIdExpectedParams = cloneDeep(expectedParams);
-    tenantIdExpectedParams.Item.id = {
-        S: id + tenantId,
-    };
-    tenantIdExpectedParams.Item.tenantId = {
-        S: tenantId,
-    };
+    test('tenantId present', () => {
+        const actualParams = DynamoDbParamBuilder.buildPutAvailableItemParam(item, id, vid, false, 'tenant1');
 
-    test('With tenantId: Param has the fields documentStatus, lockEndTs, and references', () => {
-        const actualParams = DynamoDbParamBuilder.buildPutAvailableItemParam(item, id, vid, false, tenantId);
-        expect(actualParams).toEqual(tenantIdExpectedParams);
-    });
-
-    test('With tenantId: Allow overwriting a resource', () => {
-        const actualParams = DynamoDbParamBuilder.buildPutAvailableItemParam(item, id, vid, true, tenantId);
-
-        const clonedExpectedParams = cloneDeep(tenantIdExpectedParams);
-        delete clonedExpectedParams.ConditionExpression;
+        const clonedExpectedParams = cloneDeep(expectedParams);
+        clonedExpectedParams.Item = {
+            ...clonedExpectedParams.Item,
+            _tenantId: {
+                S: 'tenant1',
+            },
+            _id: {
+                S: '8cafa46d-08b4-4ee4-b51b-803e20ae8126',
+            },
+            id: {
+                S: 'tenant1|8cafa46d-08b4-4ee4-b51b-803e20ae8126',
+            },
+        };
 
         expect(actualParams).toEqual(clonedExpectedParams);
     });
@@ -262,8 +283,6 @@ describe('buildPutAvailableItemParam', () => {
 
 describe('buildGetResourcesQueryParam', () => {
     const id = '8cafa46d-08b4-4ee4-b51b-803e20ae8126';
-    const tenantId = '111111-aaaa-2222-bbb-33333344444';
-
     const expectedParam = {
         TableName: '',
         ScanIndexForward: false,
@@ -291,37 +310,137 @@ describe('buildGetResourcesQueryParam', () => {
         expect(actualParam).toEqual(clonedExpectedParam);
     });
 
-    const tenantIdExpectedParam = {
+    test('tenantId present', () => {
+        const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(id, 'Patient', 2, undefined, 'tenant1');
+
+        const clonedExpectedParam: any = cloneDeep(expectedParam);
+        clonedExpectedParam.ExpressionAttributeValues = {
+            ...clonedExpectedParam.ExpressionAttributeValues,
+            ':hkey': {
+                S: 'tenant1|8cafa46d-08b4-4ee4-b51b-803e20ae8126',
+            },
+        };
+
+        expect(actualParam).toEqual(clonedExpectedParam);
+    });
+});
+
+describe('buildPutCreateExportRequest', () => {
+    const jobId = 'job-1';
+    const exportType = 'system';
+    const transactionTime = '2020-10-10T00:00:00.000Z';
+    const since = '2020-10-09T00:00:00.000Z';
+    const outputFormat = 'ndjson';
+
+    const job: BulkExportJob = {
+        jobId,
+        jobStatus: 'in-progress',
+        jobOwnerId: 'owner-1',
+        exportType,
+        transactionTime,
+        outputFormat,
+        since,
+        type: 'Patient,DocumentReference',
+    };
+
+    const initiateExportRequest: InitiateExportRequest = {
+        allowedResourceTypes: ['Patient'],
+        exportType: 'system',
+        requesterUserId: 'fakeUserId',
+        transactionTime,
+        type: 'Patient',
+    };
+
+    const jobWithTenantId: BulkExportJob = {
+        ...job,
+        tenantId: 'tenant1',
+    };
+
+    const expectedParam = {
         TableName: '',
-        ScanIndexForward: false,
-        Limit: 2,
-        FilterExpression: '#r = :resourceType and #t = :tenantId',
-        KeyConditionExpression: 'id = :hkey',
-        ExpressionAttributeNames: { '#r': 'resourceType', '#t': 'tenantId' },
+        Item: {
+            exportType: {
+                S: 'system',
+            },
+            jobId: {
+                S: 'job-1',
+            },
+            jobOwnerId: {
+                S: 'owner-1',
+            },
+            jobStatus: {
+                S: 'in-progress',
+            },
+            outputFormat: {
+                S: 'ndjson',
+            },
+            since: {
+                S: '2020-10-09T00:00:00.000Z',
+            },
+            transactionTime: {
+                S: '2020-10-10T00:00:00.000Z',
+            },
+            type: {
+                S: 'Patient',
+            },
+        },
+    };
+    test('Job without tenantId', () => {
+        const actualParam = DynamoDbParamBuilder.buildPutCreateExportRequest(job, initiateExportRequest);
+        console.log(actualParam);
+        expect(actualParam).toEqual(expectedParam);
+    });
+
+    test('tenantId present', () => {
+        const actualParam = DynamoDbParamBuilder.buildPutCreateExportRequest(jobWithTenantId, initiateExportRequest);
+
+        const clonedExpectedParam: any = cloneDeep(expectedParam);
+        clonedExpectedParam.Item = {
+            ...clonedExpectedParam.Item,
+            jobId: {
+                S: 'tenant1|job-1',
+            },
+            _jobId: {
+                S: 'job-1',
+            },
+            tenantId: {
+                S: 'tenant1',
+            },
+        };
+
+        expect(actualParam).toEqual(clonedExpectedParam);
+    });
+});
+
+describe('buildUpdateExportRequestJobStatus', () => {
+    const jobId = 'job-1';
+    const jobStatus = 'completed';
+
+    const expectedParam = {
+        TableName: '',
+        Key: { jobId: { S: jobId } },
+        UpdateExpression: 'set jobStatus = :newStatus',
+        ConditionExpression: 'jobId = :jobIdVal',
         ExpressionAttributeValues: {
-            ':hkey': { S: '8cafa46d-08b4-4ee4-b51b-803e20ae8126111111-aaaa-2222-bbb-33333344444' },
-            ':resourceType': { S: 'Patient' },
-            ':tenantId': { S: '111111-aaaa-2222-bbb-33333344444' },
+            ':newStatus': { S: jobStatus },
+            ':jobIdVal': { S: jobId },
         },
     };
 
-    test('With tenanId: Param without projection expression', () => {
-        const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(id, 'Patient', 2, undefined, tenantId);
-        expect(actualParam).toEqual(tenantIdExpectedParam);
+    test('Job without tenantId', () => {
+        const actualParam = DynamoDbParamBuilder.buildUpdateExportRequestJobStatus(jobId, jobStatus);
+        console.log(actualParam);
+        expect(actualParam).toEqual(expectedParam);
     });
 
-    test('With tenanId: Param with projection expression', () => {
-        const projectionExpression = 'id, resourceType, name';
-        const actualParam = DynamoDbParamBuilder.buildGetResourcesQueryParam(
-            id,
-            'Patient',
-            2,
-            projectionExpression,
-            tenantId,
-        );
+    test('tenantId present', () => {
+        const tenantId = 'tenant1';
+        const hashKey = `${tenantId}|${jobId}`;
+        const actualParam = DynamoDbParamBuilder.buildUpdateExportRequestJobStatus(jobId, jobStatus, tenantId);
 
-        const clonedExpectedParam: any = cloneDeep(tenantIdExpectedParam);
-        clonedExpectedParam.ProjectionExpression = projectionExpression;
+        const clonedExpectedParam: any = cloneDeep(expectedParam);
+        clonedExpectedParam.Key.jobId.S = hashKey;
+        clonedExpectedParam.ExpressionAttributeValues[':jobIdVal'].S = hashKey;
 
         expect(actualParam).toEqual(clonedExpectedParam);
     });

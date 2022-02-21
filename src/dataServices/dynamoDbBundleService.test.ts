@@ -19,7 +19,7 @@ import { DynamoDbBundleService } from './dynamoDbBundleService';
 import { DynamoDBConverter } from './dynamoDb';
 import { timeFromEpochInMsRegExp, utcTimeRegExp, uuidRegExp } from '../../testUtilities/regExpressions';
 import DynamoDbHelper from './dynamoDbHelper';
-import { DOCUMENT_STATUS_FIELD, LOCK_END_TS_FIELD, REFERENCES_FIELD, TENANT_ID_FIELD, VID_FIELD } from './dynamoDbUtil';
+import { DOCUMENT_STATUS_FIELD, LOCK_END_TS_FIELD, REFERENCES_FIELD, VID_FIELD } from './dynamoDbUtil';
 // eslint-disable-next-line import/order
 import sinon = require('sinon');
 
@@ -32,27 +32,17 @@ describe('atomicallyReadWriteResources', () => {
     });
 
     const id = 'bce8411e-c15e-448c-95dd-69155a837405';
-    const testTenantId = '9c7edea5-ab9f-4933-9845-9e915776d183';
     describe('ERROR Cases', () => {
-        const runTest = async (expectedResponse: BundleResponse, tenantId?: string) => {
+        const runTest = async (expectedResponse: BundleResponse) => {
             const dynamoDb = new AWS.DynamoDB();
             const bundleService = new DynamoDbBundleService(dynamoDb);
 
-            const deleteRequest: BatchReadWriteRequest =
-                tenantId === undefined
-                    ? {
-                          operation: 'delete',
-                          resourceType: 'Patient',
-                          id,
-                          resource: 'Patient/bce8411e-c15e-448c-95dd-69155a837405',
-                      }
-                    : {
-                          operation: 'delete',
-                          resourceType: 'Patient',
-                          id,
-                          tenantId,
-                          resource: 'Patient/bce8411e-c15e-448c-95dd-69155a837405',
-                      };
+            const deleteRequest: BatchReadWriteRequest = {
+                operation: 'delete',
+                resourceType: 'Patient',
+                id,
+                resource: 'Patient/bce8411e-c15e-448c-95dd-69155a837405',
+            };
             const actualResponse = await bundleService.transaction({
                 requests: [deleteRequest],
                 startTime: new Date(),
@@ -61,27 +51,63 @@ describe('atomicallyReadWriteResources', () => {
             expect(actualResponse).toStrictEqual(expectedResponse);
         };
 
-        const runFailedStaging = async (rid: string, tenantId?: string) => {
+        test('LOCK: Delete item that does not exist', async () => {
+            // READ items (Failure)
+            AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
+                callback(null, { Items: [] });
+            });
+
+            const expectedResponse: BundleResponse = {
+                success: false,
+                message: 'Failed to find resources: Patient/bce8411e-c15e-448c-95dd-69155a837405',
+                batchReadWriteResponses: [],
+                errorType: 'USER_ERROR',
+            };
+
+            await runTest(expectedResponse);
+        });
+
+        test('LOCK: Try to delete item that exist, but system cannot obtain the lock', async () => {
             // READ items (Success)
             AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
                 callback(null, {
                     Items: [
-                        DynamoDBConverter.marshall(
-                            tenantId !== undefined
-                                ? {
-                                      id: rid + tenantId,
-                                      vid: '1',
-                                      resourceType: 'Patient',
-                                      meta: { versionId: '1', lastUpdated: new Date().toISOString() },
-                                      tenantId,
-                                  }
-                                : {
-                                      id: rid,
-                                      vid: '1',
-                                      resourceType: 'Patient',
-                                      meta: { versionId: '1', lastUpdated: new Date().toISOString() },
-                                  },
-                        ),
+                        DynamoDBConverter.marshall({
+                            id,
+                            vid: '1',
+                            resourceType: 'Patient',
+                            meta: { versionId: '1', lastUpdated: new Date().toISOString() },
+                        }),
+                    ],
+                });
+            });
+
+            // LOCK items (Failure)
+            AWSMock.mock('DynamoDB', 'transactWriteItems', (params: TransactWriteItemsInput, callback: Function) => {
+                callback('ConditionalCheckFailed', {});
+            });
+
+            const expectedResponse: BundleResponse = {
+                success: false,
+                message: 'Failed to lock resources for transaction. Please try again after 35 seconds.',
+                batchReadWriteResponses: [],
+                errorType: 'SYSTEM_ERROR',
+            };
+
+            await runTest(expectedResponse);
+        });
+
+        test('STAGING: Item exist and lock obtained, but failed to stage', async () => {
+            // READ items (Success)
+            AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
+                callback(null, {
+                    Items: [
+                        DynamoDBConverter.marshall({
+                            id,
+                            vid: '1',
+                            resourceType: 'Patient',
+                            meta: { versionId: '1', lastUpdated: new Date().toISOString() },
+                        }),
                     ],
                 });
             });
@@ -107,87 +133,13 @@ describe('atomicallyReadWriteResources', () => {
                 errorType: 'SYSTEM_ERROR',
             };
 
-            await runTest(expectedResponse, tenantId);
-        };
-
-        const runLockItemsFailure = async (rid: string, tenantId?: string) => {
-            // READ items (Success)
-            AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
-                callback(null, {
-                    Items: [
-                        DynamoDBConverter.marshall(
-                            tenantId !== undefined
-                                ? {
-                                      id: rid + tenantId,
-                                      vid: '1',
-                                      resourceType: 'Patient',
-                                      meta: { versionId: '1', lastUpdated: new Date().toISOString() },
-                                      tenantId,
-                                  }
-                                : {
-                                      id: rid,
-                                      vid: '1',
-                                      resourceType: 'Patient',
-                                      meta: { versionId: '1', lastUpdated: new Date().toISOString() },
-                                  },
-                        ),
-                    ],
-                });
-            });
-
-            // LOCK items (Failure)
-            AWSMock.mock('DynamoDB', 'transactWriteItems', (params: TransactWriteItemsInput, callback: Function) => {
-                callback('ConditionalCheckFailed', {});
-            });
-
-            const expectedResponse: BundleResponse = {
-                success: false,
-                message: 'Failed to lock resources for transaction. Please try again after 35 seconds.',
-                batchReadWriteResponses: [],
-                errorType: 'SYSTEM_ERROR',
-            };
-            await runTest(expectedResponse, tenantId);
-        };
-
-        test('LOCK: Delete item that does not exist', async () => {
-            // READ items (Failure)
-            AWSMock.mock('DynamoDB', 'query', (params: QueryInput, callback: Function) => {
-                callback(null, { Items: [] });
-            });
-
-            const expectedResponse: BundleResponse = {
-                success: false,
-                message: 'Failed to find resources: Patient/bce8411e-c15e-448c-95dd-69155a837405',
-                batchReadWriteResponses: [],
-                errorType: 'USER_ERROR',
-            };
-
             await runTest(expectedResponse);
-            await runTest(expectedResponse, testTenantId);
-        });
-
-        test('LOCK: Try to delete item that exist, but system cannot obtain the lock', async () => {
-            await runLockItemsFailure(id);
-        });
-        test('LOCK: With tenant id:Try to delete item that exist, but system cannot obtain the lock', async () => {
-            await runLockItemsFailure(id, testTenantId);
-        });
-        test('STAGING: Item exist and lock obtained, but failed to stage', async () => {
-            await runFailedStaging(id);
-        });
-
-        test('STAGING: With tenant id: Item exist and lock obtained, but failed to stage', async () => {
-            await runFailedStaging(id, testTenantId);
         });
     });
 
     describe('SUCCESS Cases', () => {
         // When creating a resource, no locks is needed because no items in DDB to put a lock on yet
-        async function runCreateTest(
-            shouldReqHasReferences: boolean,
-            useVersionedReferences: boolean,
-            tenantId?: string,
-        ) {
+        async function runCreateTest(shouldReqHasReferences: boolean, useVersionedReferences: boolean = false) {
             // BUILD
             const transactWriteItemSpy = sinon.spy();
             AWSMock.mock('DynamoDB', 'transactWriteItems', (params: TransactWriteItemsInput, callback: Function) => {
@@ -239,7 +191,6 @@ describe('atomicallyReadWriteResources', () => {
                 resourceType,
                 id,
                 resource,
-                tenantId,
             };
 
             // OPERATE
@@ -273,9 +224,6 @@ describe('atomicallyReadWriteResources', () => {
                 insertedResourceJson[REFERENCES_FIELD] = [];
             }
             insertedResourceJson[LOCK_END_TS_FIELD] = Date.now();
-            if (tenantId !== undefined) {
-                insertedResourceJson[TENANT_ID_FIELD] = tenantId;
-            }
 
             const insertedResource = DynamoDBConverter.marshall(insertedResourceJson);
 
@@ -295,7 +243,7 @@ describe('atomicallyReadWriteResources', () => {
                     },
                 ],
             });
-            const expectedId = tenantId === undefined ? id : id + tenantId;
+
             // 2. change Patient record's documentStatus to be 'AVAILABLE'
             expect(transactWriteItemSpy.getCall(1).args[0]).toStrictEqual({
                 TransactItems: [
@@ -303,7 +251,7 @@ describe('atomicallyReadWriteResources', () => {
                         Update: {
                             TableName: '',
                             Key: {
-                                id: { S: expectedId },
+                                id: { S: id },
                                 vid: { N: '1' },
                             },
                             UpdateExpression: 'set documentStatus = :newStatus, lockEndTs = :futureEndTs',
@@ -326,7 +274,6 @@ describe('atomicallyReadWriteResources', () => {
                         operation: 'create',
                         lastModified: expect.stringMatching(utcTimeRegExp),
                         resourceType: 'Patient',
-                        tenantId,
                         resource: {
                             ...resource,
                             id,
@@ -342,31 +289,18 @@ describe('atomicallyReadWriteResources', () => {
             });
         }
         test('CREATING a resource with no references', async () => {
-            await runCreateTest(false, false);
+            await runCreateTest(false);
         });
 
         test('CREATING a resource with references', async () => {
-            await runCreateTest(true, false);
+            await runCreateTest(true);
         });
 
-        test('With TenantId: CREATING a resource with no references', async () => {
-            await runCreateTest(false, false, testTenantId);
-        });
-
-        test('With TenantId: CREATING a resource references', async () => {
-            await runCreateTest(true, false, testTenantId);
-        });
         test('CREATING a resource with references and versioned reference links', async () => {
             await runCreateTest(true, true);
         });
-        test('With TenantId: CREATING a resource with references and versioned reference links', async () => {
-            await runCreateTest(true, true, testTenantId);
-        });
-        async function runUpdateTest(
-            shouldReqHasReferences: boolean,
-            useVersionedReferences: boolean = false,
-            tenantId?: string,
-        ) {
+
+        async function runUpdateTest(shouldReqHasReferences: boolean, useVersionedReferences: boolean = false) {
             // BUILD
             const transactWriteItemSpy = sinon.spy();
             AWSMock.mock('DynamoDB', 'transactWriteItems', (params: TransactWriteItemsInput, callback: Function) => {
@@ -401,22 +335,10 @@ describe('atomicallyReadWriteResources', () => {
                 meta: { versionId: newVid.toString(), lastUpdated: new Date().toISOString(), security: 'skynet' },
             };
 
-            const mostRecentResource = {
-                ...oldResource,
-                tenantId,
-            };
-
             const getMostRecentResourceStub = sinon.stub(DynamoDbHelper.prototype, 'getMostRecentResource');
-
-            if (tenantId === undefined) {
-                getMostRecentResourceStub
-                    .withArgs(resourceType, id, 'id, resourceType, meta')
-                    .returns(Promise.resolve({ message: 'Resource found', resource: oldResource }));
-            } else {
-                getMostRecentResourceStub
-                    .withArgs(resourceType, id, 'id, resourceType, meta, tenantId', tenantId)
-                    .returns(Promise.resolve({ message: 'Resource found', resource: mostRecentResource }));
-            }
+            getMostRecentResourceStub
+                .withArgs(resourceType, id, 'id, resourceType, meta')
+                .returns(Promise.resolve({ message: 'Resource found', resource: oldResource }));
 
             const dynamoDb = new AWS.DynamoDB();
             let versionedLinks;
@@ -431,21 +353,9 @@ describe('atomicallyReadWriteResources', () => {
                     meta: { versionId: 3 },
                 };
 
-                if (tenantId === undefined) {
-                    getMostRecentResourceStub
-                        .withArgs('Organization', '1', 'meta')
-                        .returns(Promise.resolve({ message: 'Resource found', resource: organizationResource }));
-                } else {
-                    const tenantIdOrganizationResource = {
-                        ...organizationResource,
-                        tenantId,
-                    };
-                    getMostRecentResourceStub
-                        .withArgs('Organization', '1', 'meta', tenantId)
-                        .returns(
-                            Promise.resolve({ message: 'Resource found', resource: tenantIdOrganizationResource }),
-                        );
-                }
+                getMostRecentResourceStub
+                    .withArgs('Organization', '1', 'meta')
+                    .returns(Promise.resolve({ message: 'Resource found', resource: organizationResource }));
             }
             const transactionService = new DynamoDbBundleService(dynamoDb, false, undefined, { versionedLinks });
 
@@ -454,7 +364,6 @@ describe('atomicallyReadWriteResources', () => {
                 resourceType,
                 id,
                 resource: newResource,
-                tenantId,
             };
 
             // OPERATE
@@ -474,7 +383,7 @@ describe('atomicallyReadWriteResources', () => {
                         Update: {
                             TableName: '',
                             Key: {
-                                id: { S: tenantId === undefined ? id : id + tenantId },
+                                id: { S: id },
                                 vid: { N: oldVid.toString() },
                             },
                             ConditionExpression:
@@ -510,10 +419,7 @@ describe('atomicallyReadWriteResources', () => {
                 insertedResourceJson[REFERENCES_FIELD] = [];
             }
             insertedResourceJson[LOCK_END_TS_FIELD] = Date.now();
-            if (tenantId !== undefined) {
-                insertedResourceJson[TENANT_ID_FIELD] = tenantId;
-                insertedResourceJson.id += tenantId;
-            }
+
             const insertedResource = DynamoDBConverter.marshall(insertedResourceJson);
             insertedResource.lockEndTs.N = expect.stringMatching(timeFromEpochInMsRegExp);
             insertedResource.meta!.M!.lastUpdated.S = expect.stringMatching(utcTimeRegExp);
@@ -538,7 +444,7 @@ describe('atomicallyReadWriteResources', () => {
                         Update: {
                             TableName: '',
                             Key: {
-                                id: { S: tenantId === undefined ? id : id + tenantId },
+                                id: { S: id },
                                 vid: { N: oldVid.toString() },
                             },
                             ConditionExpression: 'resourceType = :resourceType',
@@ -556,7 +462,7 @@ describe('atomicallyReadWriteResources', () => {
                         Update: {
                             TableName: '',
                             Key: {
-                                id: { S: tenantId === undefined ? id : id + tenantId },
+                                id: { S: id },
                                 vid: { N: newVid.toString() },
                             },
                             ConditionExpression: 'resourceType = :resourceType',
@@ -582,7 +488,6 @@ describe('atomicallyReadWriteResources', () => {
                         operation: 'update',
                         lastModified: expect.stringMatching(utcTimeRegExp),
                         resourceType,
-                        tenantId,
                         resource: {
                             ...newResource,
                             meta: {
@@ -607,18 +512,6 @@ describe('atomicallyReadWriteResources', () => {
 
         test('UPDATING a resource with references and versioned reference links', async () => {
             await runUpdateTest(true, true);
-        });
-
-        test('With TenantId: UPDATING a resource with no references', async () => {
-            await runUpdateTest(false, false, testTenantId);
-        });
-
-        test('With TenantId: UPDATING a resource with references', async () => {
-            await runUpdateTest(true, false, testTenantId);
-        });
-
-        test('With TenantId: UPDATING a resource with references and versioned reference links', async () => {
-            await runUpdateTest(true, true, testTenantId);
         });
     });
 

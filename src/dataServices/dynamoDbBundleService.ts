@@ -44,6 +44,8 @@ export class DynamoDbBundleService implements Bundle {
 
     private readonly maxExecutionTimeMs: number;
 
+    readonly enableMultiTenancy: boolean;
+
     private static readonly dynamoDbMaxBatchSize = 25;
 
     private readonly versionedLinks: Record<string, Set<string>> | undefined;
@@ -53,7 +55,8 @@ export class DynamoDbBundleService implements Bundle {
      * @param dynamoDb
      * @param supportUpdateCreate
      * @param maxExecutionTimeMs
-     * @param versionedLinks Data structure to control for which resourceTypes (key) which references (array of paths) should be modified,
+     * @param options.enableMultiTenancy - whether or not to enable multi-tenancy. When enabled a tenantId is required for all requests.
+     * @param options.versionedLinks Data structure to control for which resourceTypes (key) which references (array of paths) should be modified,
      * so that they point to the current (point in time) version of the referenced resource.
      * For example:
      *  {
@@ -68,22 +71,37 @@ export class DynamoDbBundleService implements Bundle {
         dynamoDb: DynamoDB,
         supportUpdateCreate: boolean = false,
         maxExecutionTimeMs?: number,
-        { versionedLinks }: { versionedLinks?: Record<string, string[]> } = {},
+        {
+            enableMultiTenancy = false,
+            versionedLinks,
+        }: { enableMultiTenancy?: boolean; versionedLinks?: Record<string, string[]> } = {},
     ) {
         this.dynamoDbHelper = new DynamoDbHelper(dynamoDb);
         this.dynamoDb = dynamoDb;
         this.updateCreateSupported = supportUpdateCreate;
         this.maxExecutionTimeMs = maxExecutionTimeMs || 26 * 1000;
-        this.versionedLinks = mapValues(versionedLinks, value => new Set(value));
+        this.enableMultiTenancy = enableMultiTenancy;
+        this.versionedLinks = mapValues(versionedLinks, (value) => new Set(value));
+    }
+
+    private assertValidTenancyMode(tenantId?: string) {
+        if (this.enableMultiTenancy && tenantId === undefined) {
+            throw new Error('This instance has multi-tenancy enabled, but the incoming request is missing tenantId');
+        }
+        if (!this.enableMultiTenancy && tenantId !== undefined) {
+            throw new Error('This instance has multi-tenancy disabled, but the incoming request has a tenantId');
+        }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async batch(request: BatchRequest): Promise<BundleResponse> {
+        this.assertValidTenancyMode(request.tenantId);
         throw new Error('Batch operation is not supported.');
     }
 
     async transaction(request: TransactionRequest): Promise<BundleResponse> {
-        const { requests, startTime } = request;
+        this.assertValidTenancyMode(request.tenantId);
+        const { requests, startTime, tenantId } = request;
         if (requests.length === 0) {
             return {
                 success: true,
@@ -93,7 +111,7 @@ export class DynamoDbBundleService implements Bundle {
         }
 
         // 1. Put a lock on all requests
-        const lockItemsResponse = await this.lockItems(requests);
+        const lockItemsResponse = await this.lockItems(requests, tenantId);
         const { successfulLock } = lockItemsResponse;
         let { lockedItems } = lockItemsResponse;
 
@@ -122,10 +140,10 @@ export class DynamoDbBundleService implements Bundle {
             };
         }
         if (this.versionedLinks) {
-            const wasSuccessful = await this.updatedReferences(requests, lockedItems);
+            const wasSuccessful = await this.updatedReferences(requests, lockedItems, tenantId);
             elapsedTimeInMs = this.getElapsedTime(startTime);
             if (elapsedTimeInMs > this.maxExecutionTimeMs || !wasSuccessful) {
-                await this.unlockItems(lockedItems, true);
+                await this.unlockItems(lockedItems, true, tenantId);
                 if (elapsedTimeInMs > this.maxExecutionTimeMs) {
                     logger.warn(
                         'Locks were rolled back because elapsed time is longer than max code execution time. Elapsed time',
@@ -149,15 +167,15 @@ export class DynamoDbBundleService implements Bundle {
         }
 
         // 2.  Stage resources
-        const stageItemResponse = await this.stageItems(requests, lockedItems);
+        const stageItemResponse = await this.stageItems(requests, lockedItems, tenantId);
         const { batchReadWriteResponses } = stageItemResponse;
         const successfullyStageItems = stageItemResponse.success;
         lockedItems = stageItemResponse.lockedItems;
 
         elapsedTimeInMs = this.getElapsedTime(startTime);
         if (elapsedTimeInMs > this.maxExecutionTimeMs || !successfullyStageItems) {
-            lockedItems = await this.rollbackItems(batchReadWriteResponses, lockedItems);
-            await this.unlockItems(lockedItems, true);
+            lockedItems = await this.rollbackItems(batchReadWriteResponses, lockedItems, tenantId);
+            await this.unlockItems(lockedItems, true, tenantId);
 
             if (elapsedTimeInMs > this.maxExecutionTimeMs) {
                 logger.warn(
@@ -181,7 +199,7 @@ export class DynamoDbBundleService implements Bundle {
         }
 
         // 3. unlockItems
-        await this.unlockItems(lockedItems, false);
+        await this.unlockItems(lockedItems, false, tenantId);
 
         return {
             success: true,
@@ -192,6 +210,7 @@ export class DynamoDbBundleService implements Bundle {
 
     private async lockItems(
         requests: BatchReadWriteRequest[],
+        tenantId?: string,
     ): Promise<{
         successfulLock: boolean;
         errorType?: BatchReadWriteErrorType;
@@ -200,16 +219,15 @@ export class DynamoDbBundleService implements Bundle {
     }> {
         // We don't need to put a lock on CREATE requests because there are no Documents in the DB for the CREATE
         // request yet
-        const allNonCreateRequests = requests.filter(request => {
+        const allNonCreateRequests = requests.filter((request) => {
             return request.operation !== 'create';
         });
 
-        const itemsToLock: ItemRequest[] = allNonCreateRequests.map(request => {
+        const itemsToLock: ItemRequest[] = allNonCreateRequests.map((request) => {
             return {
                 resourceType: request.resourceType,
                 id: request.id,
                 operation: request.operation,
-                tenantId: request.tenantId,
             };
         });
 
@@ -228,15 +246,14 @@ export class DynamoDbBundleService implements Bundle {
         const lockedItems: ItemRequest[] = [];
 
         // We need to read the items so we can find the versionId of each item
-        const itemReadPromises = itemsToLock.map(async itemToLock => {
-            const projectionExpression =
-                itemToLock.tenantId === undefined ? 'id, resourceType, meta' : 'id, resourceType, meta, tenantId';
+        const itemReadPromises = itemsToLock.map(async (itemToLock) => {
+            const projectionExpression = 'id, resourceType, meta';
             try {
                 return await this.dynamoDbHelper.getMostRecentResource(
                     itemToLock.resourceType,
                     itemToLock.id,
                     projectionExpression,
-                    itemToLock.tenantId,
+                    tenantId,
                 );
             } catch (e) {
                 if (e instanceof ResourceNotFoundError) {
@@ -275,14 +292,13 @@ export class DynamoDbBundleService implements Bundle {
                 continue;
             }
 
-            const { resourceType, id, meta, tenantId } = itemResponse.resource;
+            const { resourceType, id, meta } = itemResponse.resource;
             const vid = parseInt(meta.versionId, 10);
 
             const lockedItem: ItemRequest = {
                 resourceType,
                 id,
                 vid,
-                tenantId,
                 operation: allNonCreateRequests[i].operation,
             };
             if (lockedItem.operation === 'update') {
@@ -319,17 +335,32 @@ export class DynamoDbBundleService implements Bundle {
             });
         } catch (e) {
             logger.error('Failed to lock', e);
+            if ((e as any).code === 'TransactionCanceledException') {
+                return Promise.resolve({
+                    successfulLock: false,
+                    errorType: 'CONFLICT_ERROR',
+                    errorMessage: `Failed to lock resources for transaction due to conflict. Please try again after ${
+                        DynamoDbParamBuilder.LOCK_DURATION_IN_MS / 1000
+                    } seconds.`,
+                    lockedItems: itemsLockedSuccessfully,
+                });
+            }
             return Promise.resolve({
                 successfulLock: false,
                 errorType: 'SYSTEM_ERROR',
-                errorMessage: `Failed to lock resources for transaction. Please try again after ${DynamoDbParamBuilder.LOCK_DURATION_IN_MS /
-                    1000} seconds.`,
+                errorMessage: `Failed to lock resources for transaction. Please try again after ${
+                    DynamoDbParamBuilder.LOCK_DURATION_IN_MS / 1000
+                } seconds.`,
                 lockedItems: itemsLockedSuccessfully,
             });
         }
     }
 
-    private async updatedReferences(requests: BatchReadWriteRequest[], lockedItems: ItemRequest[]): Promise<boolean> {
+    private async updatedReferences(
+        requests: BatchReadWriteRequest[],
+        lockedItems: ItemRequest[],
+        tenantId?: string,
+    ): Promise<boolean> {
         const idToVersionId: Record<string, string> = {};
         lockedItems.forEach((itemRequest: ItemRequest) => {
             if (itemRequest.operation === 'update' && itemRequest.vid) {
@@ -361,18 +392,17 @@ export class DynamoDbBundleService implements Bundle {
             })
             .flatMap((request: BatchReadWriteRequest) => {
                 const { resource } = request;
-                return Object.entries(flatten(resource)).map(entry => {
+                return Object.entries(flatten(resource)).map((entry) => {
                     return {
                         resource: request.resource,
                         resourceType: request.resourceType,
                         path: entry[0],
                         value: entry[1],
-                        tenantId: request.tenantId,
                     };
                 });
             })
             .filter(
-                item => item.path.endsWith('.reference') && this.versionedLinks?.[item.resourceType].has(item.path),
+                (item) => item.path.endsWith('.reference') && this.versionedLinks?.[item.resourceType].has(item.path),
             );
 
         const requestsForDDB: {
@@ -381,7 +411,6 @@ export class DynamoDbBundleService implements Bundle {
             value: string;
             resourceType: string;
             id: string;
-            tenantId?: string;
         }[] = [];
         requestsWithReferencesThatMustBeLookedUp.forEach((item: any) => {
             const fullUrlMatch = item.value.match(captureFullUrlParts);
@@ -406,13 +435,13 @@ export class DynamoDbBundleService implements Bundle {
             }
         });
         const responsesFromDDB: boolean[] = await Promise.all(
-            requestsForDDB.map(async item => {
+            requestsForDDB.map(async (item) => {
                 try {
                     const itemResponse: GenericResponse = await this.dynamoDbHelper.getMostRecentResource(
                         item.resourceType,
                         item.id,
                         'meta',
-                        item.tenantId,
+                        tenantId,
                     );
                     const { meta } = itemResponse.resource;
                     set(item.resource, item.path, `${item.value}/_history/${meta.versionId}`);
@@ -424,7 +453,7 @@ export class DynamoDbBundleService implements Bundle {
                 }
             }),
         );
-        return responsesFromDDB.every(item => item);
+        return responsesFromDDB.every((item) => item);
     }
 
     /*
@@ -438,13 +467,14 @@ export class DynamoDbBundleService implements Bundle {
     private async unlockItems(
         lockedItems: ItemRequest[],
         rollBack: boolean,
+        tenantId?: string,
     ): Promise<{ successfulUnlock: boolean; locksFailedToRelease: ItemRequest[] }> {
         if (lockedItems.length === 0) {
             return { successfulUnlock: true, locksFailedToRelease: [] };
         }
         logger.info('Unlocking begins');
 
-        const updateRequests: any[] = lockedItems.map(lockedItem => {
+        const updateRequests: any[] = lockedItems.map((lockedItem) => {
             let newStatus = DOCUMENT_STATUS.AVAILABLE;
             // If the lockedItem was a result of a delete operation or if the lockedItem was the original version of an item that was UPDATED then
             // set the lockedItem's status to be "DELETED"
@@ -461,7 +491,7 @@ export class DynamoDbBundleService implements Bundle {
                 lockedItem.id,
                 lockedItem.vid || 0,
                 lockedItem.resourceType,
-                lockedItem.tenantId,
+                tenantId,
             );
         });
 
@@ -493,15 +523,21 @@ export class DynamoDbBundleService implements Bundle {
     private async rollbackItems(
         batchReadWriteEntryResponses: BatchReadWriteResponse[],
         lockedItems: ItemRequest[],
+        tenantId?: string,
     ): Promise<ItemRequest[]> {
         logger.info('Starting unstage items');
 
         const { transactionRequests, itemsToRemoveFromLock } = DynamoDbBundleServiceHelper.generateRollbackRequests(
             batchReadWriteEntryResponses,
+            tenantId,
         );
 
         const newLockedItems = this.removeLocksFromArray(lockedItems, itemsToRemoveFromLock);
 
+        // if batchReadWriteEntryResponses is empty, don't throw error here, since there is nothing to rollback
+        if (batchReadWriteEntryResponses.length === 0) {
+            return newLockedItems;
+        }
         try {
             const params = {
                 TransactItems: transactionRequests,
@@ -523,11 +559,11 @@ export class DynamoDbBundleService implements Bundle {
         locksToRemove: { id: string; vid: string; resourceType: string }[],
     ) {
         const fullIdToLockedItem: Record<string, ItemRequest> = {};
-        originalLocks.forEach(lockedItem => {
+        originalLocks.forEach((lockedItem) => {
             fullIdToLockedItem[this.generateFullId(lockedItem.id, lockedItem.vid?.toString() || '0')] = lockedItem;
         });
 
-        locksToRemove.forEach(itemToRemove => {
+        locksToRemove.forEach((itemToRemove) => {
             const fullId = this.generateFullId(itemToRemove.id, itemToRemove.vid);
             if (fullIdToLockedItem[fullId]) {
                 delete fullIdToLockedItem[fullId];
@@ -537,7 +573,7 @@ export class DynamoDbBundleService implements Bundle {
         return Object.values(fullIdToLockedItem);
     }
 
-    private async stageItems(requests: BatchReadWriteRequest[], lockedItems: ItemRequest[]) {
+    private async stageItems(requests: BatchReadWriteRequest[], lockedItems: ItemRequest[], tenantId?: string) {
         logger.info('Start Staging of Items');
 
         const idToVersionId: Record<string, number> = {};
@@ -545,14 +581,8 @@ export class DynamoDbBundleService implements Bundle {
             idToVersionId[idItemLocked.id] = idItemLocked.vid || 0;
         });
 
-        const {
-            deleteRequests,
-            createRequests,
-            updateRequests,
-            readRequests,
-            newLocks,
-            newStagingResponses,
-        } = DynamoDbBundleServiceHelper.generateStagingRequests(requests, idToVersionId);
+        const { deleteRequests, createRequests, updateRequests, readRequests, newLocks, newStagingResponses } =
+            DynamoDbBundleServiceHelper.generateStagingRequests(requests, idToVersionId, tenantId);
 
         // Order that Bundle specifies
         // https://www.hl7.org/fhir/http.html#trules

@@ -21,6 +21,7 @@ describe('DdbToEsHelper', () => {
     });
 
     describe('createIndexAndAliasIfNotExist', () => {
+        process.env.ENABLE_ES_HARD_DELETE = 'true';
         const getAliasesBody = {
             documentreference: {
                 aliases: {},
@@ -50,15 +51,11 @@ describe('DdbToEsHelper', () => {
                 },
             },
         };
-        test('empty set passed in', async () => {
+        test('empty array passed in', async () => {
             // TEST
-            await expect(ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(), false)).resolves.not.toThrow();
+            await expect(ddbToEsHelper.createIndexAndAliasIfNotExist([])).resolves.not.toThrow();
         });
-        test('Multi Tenant aware: empty set passed in', async () => {
-            // TEST
-            await expect(ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(), true)).resolves.not.toThrow();
-        });
-        const testAliasAlreadyCreated = async (includeTenantId: boolean) => {
+        test('Alias already created', async () => {
             // BUILD
             const mockExists = jest.fn(() => {
                 return { statusCode: 200, body: true };
@@ -73,7 +70,7 @@ describe('DdbToEsHelper', () => {
                 mockExists,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['patient']), includeTenantId);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist([{ index: 'patient', alias: 'patient-alias' }]);
             // VALIDATE
             expect(mockExists).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -82,16 +79,9 @@ describe('DdbToEsHelper', () => {
                     querystring: { expand_wildcards: 'all' },
                 }),
             );
-        };
-        test('Alias already created', async () => {
-            await testAliasAlreadyCreated(false);
         });
 
-        test('Multi Tenant aware: Alias already created', async () => {
-            await testAliasAlreadyCreated(true);
-        });
-
-        const testCreateIndexAndAlias = async (includeTenantId: boolean) => {
+        test('Create index and alias', async () => {
             // BUILD
             // esMock throws 404 for unmocked method, so there's no need to mock HEAD /patient/_alias/patient-alias here
             esMock.add({ method: 'GET', path: '/_alias' }, () => {
@@ -109,27 +99,20 @@ describe('DdbToEsHelper', () => {
                 mockAddIndex,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['organization']), includeTenantId);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist([{ index: 'organization', alias: 'organization-alias' }]);
             // VALIDATE
             expect(mockAddIndex).toHaveBeenCalledWith(
                 expect.objectContaining({
                     body: {
                         aliases: { 'organization-alias': {} },
                         mappings: {
-                            properties: includeTenantId
-                                ? {
-                                      _references: { index: true, type: 'keyword' },
-                                      documentStatus: { index: true, type: 'keyword' },
-                                      id: { index: true, type: 'keyword' },
-                                      resourceType: { index: true, type: 'keyword' },
-                                      tenantId: { index: true, type: 'keyword' },
-                                  }
-                                : {
-                                      _references: { index: true, type: 'keyword' },
-                                      documentStatus: { index: true, type: 'keyword' },
-                                      id: { index: true, type: 'keyword' },
-                                      resourceType: { index: true, type: 'keyword' },
-                                  },
+                            properties: {
+                                _references: { index: true, type: 'keyword' },
+                                documentStatus: { index: true, type: 'keyword' },
+                                id: { index: true, type: 'keyword' },
+                                resourceType: { index: true, type: 'keyword' },
+                                _tenantId: { index: true, type: 'keyword' },
+                            },
                         },
                     },
                     method: 'PUT',
@@ -137,15 +120,58 @@ describe('DdbToEsHelper', () => {
                     querystring: {},
                 }),
             );
-        };
-        test('Create index and alias', async () => {
-            await testCreateIndexAndAlias(false);
         });
 
-        test('Create index and alias', async () => {
-            await testCreateIndexAndAlias(true);
+        test('Create index and multiple aliases for same index', async () => {
+            // BUILD
+            // esMock throws 404 for unmocked method, so there's no need to mock HEAD /patient/_alias/patient-alias here
+            esMock.add({ method: 'GET', path: '/_alias' }, () => {
+                return getAliasesBody;
+            });
+
+            const mockAddIndex = jest.fn(() => {
+                return { statusCode: 200 };
+            });
+            esMock.add(
+                {
+                    method: 'PUT',
+                    path: '/organization',
+                },
+                mockAddIndex,
+            );
+            // TEST
+            await ddbToEsHelper.createIndexAndAliasIfNotExist([
+                { index: 'organization', alias: 'organization-alias' },
+                { index: 'organization', alias: 'another-organization-alias' },
+                { index: 'organization', alias: 'yet-another-organization-alias' },
+            ]);
+            // VALIDATE
+            expect(mockAddIndex).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    body: {
+                        aliases: {
+                            'organization-alias': {},
+                            'another-organization-alias': {},
+                            'yet-another-organization-alias': {},
+                        },
+                        mappings: {
+                            properties: {
+                                _references: { index: true, type: 'keyword' },
+                                documentStatus: { index: true, type: 'keyword' },
+                                id: { index: true, type: 'keyword' },
+                                resourceType: { index: true, type: 'keyword' },
+                                _tenantId: { index: true, type: 'keyword' },
+                            },
+                        },
+                    },
+                    method: 'PUT',
+                    path: '/organization',
+                    querystring: {},
+                }),
+            );
         });
-        const testCreateAliasForExistingIndex = async (includeTenantId: boolean) => {
+
+        test('Create alias for existing index', async () => {
             // BUILD
             // esMock throws 404 for unmocked method, so there's no need to mock HEAD /patient/_alias/patient-alias here
             esMock.add({ method: 'GET', path: '/_alias' }, () => {
@@ -163,18 +189,13 @@ describe('DdbToEsHelper', () => {
                 mockAddAlias,
             );
             // TEST
-            await ddbToEsHelper.createIndexAndAliasIfNotExist(new Set(['documentreference']), includeTenantId);
+            await ddbToEsHelper.createIndexAndAliasIfNotExist([
+                { index: 'documentreference', alias: 'documentreference-alias' },
+            ]);
             // VALIDATE
             expect(mockAddAlias).toHaveBeenCalledWith(
                 expect.objectContaining({ path: '/documentreference/_alias/documentreference-alias' }),
             );
-        };
-        test('Create alias for existing index', async () => {
-            await testCreateAliasForExistingIndex(false);
-        });
-
-        test('Multi Tenant aware: Create alias for existing index', async () => {
-            await testCreateAliasForExistingIndex(true);
         });
     });
 
@@ -193,14 +214,14 @@ describe('DdbToEsHelper', () => {
         };
 
         // TEST
-        const result: ESBulkCommand = ddbToEsHelper.createBulkESDelete(ddbImage);
+        const result: ESBulkCommand = ddbToEsHelper.createBulkESDelete(ddbImage, 'someAlias');
         // VALIDATE
         const expectedOutput: ESBulkCommand = {
             id: compositeId,
             type: 'delete',
             bulkCommand: [
                 {
-                    delete: { _index: `${resourceType.toLowerCase()}-alias`, _id: compositeId },
+                    delete: { _index: `someAlias`, _id: compositeId },
                 },
             ],
         };
@@ -223,13 +244,13 @@ describe('DdbToEsHelper', () => {
             const ddbImageCopy = { ...ddbImage, documentStatus: 'AVAILABLE' };
 
             // TEST
-            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy);
+            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy, 'someAlias');
             // VALIDATE
             const expectedOutput: ESBulkCommand = {
                 id: compositeId,
                 type: 'upsert-AVAILABLE',
                 bulkCommand: [
-                    { update: { _index: `${resourceType.toLowerCase()}-alias`, _id: compositeId } },
+                    { update: { _index: 'someAlias', _id: compositeId } },
                     { doc: ddbImageCopy, doc_as_upsert: true },
                 ],
             };
@@ -240,13 +261,13 @@ describe('DdbToEsHelper', () => {
             const ddbImageCopy = { ...ddbImage, documentStatus: 'DELETED' };
 
             // TEST
-            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy);
+            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy, 'someAlias');
             // VALIDATE
             const expectedOutput: ESBulkCommand = {
                 id: compositeId,
                 type: 'upsert-DELETED',
                 bulkCommand: [
-                    { update: { _index: `${resourceType.toLowerCase()}-alias`, _id: compositeId } },
+                    { update: { _index: 'someAlias', _id: compositeId } },
                     { doc: ddbImageCopy, doc_as_upsert: true },
                 ],
             };
@@ -257,7 +278,7 @@ describe('DdbToEsHelper', () => {
             const ddbImageCopy = { ...ddbImage, documentStatus: 'PENDING' };
 
             // TEST
-            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy);
+            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy, 'someAlias');
             // VALIDATE
             expect(result).toBeNull();
         });
@@ -266,7 +287,7 @@ describe('DdbToEsHelper', () => {
             const ddbImageCopy = { ...ddbImage, documentStatus: 'LOCKED' };
 
             // TEST
-            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy);
+            const result: ESBulkCommand | null = ddbToEsHelper.createBulkESUpsert(ddbImageCopy, 'someAlias');
             // VALIDATE
             expect(result).toBeNull();
         });
@@ -450,6 +471,45 @@ describe('DdbToEsHelper', () => {
                     querystring: { refresh: 'wait_for' },
                 }),
             );
+        });
+    });
+
+    describe('isRemoveResource', () => {
+        const modifyRecord: any = {
+            eventID: 'some-event-id',
+            eventName: 'MODIFY',
+            dynamodb: {
+                OldImage: { documentStatus: { S: 'AVAILABLE' } },
+                NewImage: { documentStatus: { S: 'DELETED' } },
+            },
+        };
+
+        test('Should remove for REMOVE event', () => {
+            // BUILD
+            const removeRecord: any = {
+                eventID: 'some-event-id',
+                eventName: 'REMOVE',
+                dynamodb: {
+                    OldImage: { documentStatus: { S: 'AVAILABLE' } },
+                    NewImage: { documentStatus: { S: 'AVAILABLE' } },
+                },
+            };
+            // TEST
+            expect(ddbToEsHelper.isRemoveResource(removeRecord)).toBeTruthy();
+        });
+
+        test('Should remove for new image in DELETED status and hard delete enabled', () => {
+            // BUILD
+            process.env.ENABLE_ES_HARD_DELETE = 'true';
+            // TEST
+            expect(ddbToEsHelper.isRemoveResource(modifyRecord)).toBeTruthy();
+        });
+
+        test('Should NOT remove for new image in DELETED status and hard delete NOT enabled', () => {
+            // BUILD
+            process.env.ENABLE_ES_HARD_DELETE = 'false';
+            // TEST
+            expect(ddbToEsHelper.isRemoveResource(modifyRecord)).toBeFalsy();
         });
     });
 });

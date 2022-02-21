@@ -20,12 +20,16 @@ export interface BulkExportStateMachineExecutionParameters {
  */
 export interface BulkExportStateMachineGlobalParameters {
     jobId: string;
+    jobOwnerId: string;
     exportType: ExportType;
     transactionTime: string;
     groupId?: string;
     outputFormat?: string;
     since?: string;
     type?: string;
+    tenantId?: string;
+    serverUrl?: string;
+    compartmentSearchParamFile?: string;
     executionParameters?: BulkExportStateMachineExecutionParameters;
 }
 
@@ -40,4 +44,7 @@ export interface BulkExportJob {
     groupId?: string;
     jobFailedMessage?: string;
     type?: string;
+    tenantId?: string;
+    serverUrl?: string;
+    compartmentSearchParamFile?: string;
 }

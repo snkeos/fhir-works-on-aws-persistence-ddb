@@ -26,10 +26,12 @@ import {
     ResourceNotFoundError,
     ResourceVersionNotFoundError,
     TooManyConcurrentExportRequestsError,
+    UnauthorizedError,
     UpdateResourceRequest,
     vReadResourceRequest,
 } from 'fhir-works-on-aws-interface';
 import DynamoDB, { ItemList } from 'aws-sdk/clients/dynamodb';
+import { difference } from 'lodash';
 import { DynamoDBConverter } from './dynamoDb';
 import DOCUMENT_STATUS from './documentStatus';
 import { DynamoDbBundleService } from './dynamoDbBundleService';
@@ -38,23 +40,8 @@ import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 import DynamoDbHelper from './dynamoDbHelper';
 import { getBulkExportResults, startJobExecution } from '../bulkExport/bulkExport';
 import { BulkExportJob } from '../bulkExport/types';
-const AWSXRay = require('aws-xray-sdk');
-
-const buildExportJob = (initiateExportRequest: InitiateExportRequest): BulkExportJob => {
-    const initialStatus: ExportJobStatus = 'in-progress';
-    return {
-        jobId: uuidv4(),
-        jobOwnerId: initiateExportRequest.requesterUserId,
-        exportType: initiateExportRequest.exportType,
-        groupId: initiateExportRequest.groupId ?? '',
-        outputFormat: initiateExportRequest.outputFormat ?? 'ndjson',
-        since: initiateExportRequest.since ?? '1800-01-01T00:00:00.000Z', // Default to a long time ago in the past
-        type: initiateExportRequest.type ?? '',
-        transactionTime: initiateExportRequest.transactionTime,
-        jobStatus: initialStatus,
-        jobFailedMessage: '',
-    };
-};
+import { BulkExportResultsUrlGenerator } from '../bulkExport/bulkExportResultsUrlGenerator';
+import { BulkExportS3PresignedUrlGenerator } from '../bulkExport/bulkExportS3PresignedUrlGenerator';
 
 export class DynamoDbDataService implements Persistence, BulkDataAccess {
     private readonly MAXIMUM_SYSTEM_LEVEL_CONCURRENT_REQUESTS = 2;
@@ -63,32 +50,62 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
 
     readonly updateCreateSupported: boolean;
 
+    readonly enableMultiTenancy: boolean;
+
     private readonly transactionService: DynamoDbBundleService;
 
     private readonly dynamoDbHelper: DynamoDbHelper;
 
     private readonly dynamoDb: DynamoDB;
 
-    constructor(dynamoDb: DynamoDB, supportUpdateCreate: boolean = false) {
+    private readonly bulkExportResultsUrlGenerator: BulkExportResultsUrlGenerator;
+
+    /**
+     * @param dynamoDb - instance of the aws-sdk DynamoDB client
+     * @param supportUpdateCreate - Enables update as create. See https://www.hl7.org/fhir/http.html#upsert
+     * @param options
+     * @param options.enableMultiTenancy - whether or not to enable multi-tenancy. When enabled a tenantId is required for all requests.
+     * @param options.bulkExportResultsUrlGenerator - optionally provide an implementation of bulkExportResultsUrlGenerator to override how the bulk export results URLs are generated.
+     * This can be useful if you want to serve export results from a file server instead of directly from s3.
+     */
+    constructor(
+        dynamoDb: DynamoDB,
+        supportUpdateCreate: boolean = false,
+        {
+            enableMultiTenancy = false,
+            bulkExportResultsUrlGenerator = new BulkExportS3PresignedUrlGenerator(),
+        }: { enableMultiTenancy?: boolean; bulkExportResultsUrlGenerator?: BulkExportResultsUrlGenerator } = {},
+    ) {
         this.dynamoDbHelper = new DynamoDbHelper(dynamoDb);
-        this.transactionService = new DynamoDbBundleService(dynamoDb, supportUpdateCreate);
+        this.transactionService = new DynamoDbBundleService(dynamoDb, supportUpdateCreate, undefined, {
+            enableMultiTenancy,
+        });
         this.dynamoDb = dynamoDb;
         this.updateCreateSupported = supportUpdateCreate;
+        this.enableMultiTenancy = enableMultiTenancy;
+        this.bulkExportResultsUrlGenerator = bulkExportResultsUrlGenerator;
+    }
+
+    private assertValidTenancyMode(tenantId?: string) {
+        if (this.enableMultiTenancy && tenantId === undefined) {
+            throw new Error('This instance has multi-tenancy enabled, but the incoming request is missing tenantId');
+        }
+        if (!this.enableMultiTenancy && tenantId !== undefined) {
+            throw new Error('This instance has multi-tenancy disabled, but the incoming request has a tenantId');
+        }
     }
 
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`readResource`);
-        const result = this.dynamoDbHelper.getMostRecentUserReadableResource(
+        this.assertValidTenancyMode(request.tenantId);
+        return this.dynamoDbHelper.getMostRecentUserReadableResource(
             request.resourceType,
             request.id,
             request.tenantId,
         );
-        newSubseg.close();
-        return result;
     }
 
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`vReadResource`);
+        this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, vid, tenantId } = request;
         const params = DynamoDbParamBuilder.buildGetItemParam(id, parseInt(vid, 10), tenantId);
         const result = await this.dynamoDb.getItem(params).promise();
@@ -100,7 +117,6 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             throw new ResourceVersionNotFoundError(resourceType, id, vid);
         }
         item = DynamoDbUtil.cleanItem(item);
-        newSubseg.close();
         return {
             message: 'Resource found',
             resource: item,
@@ -108,15 +124,12 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async createResource(request: CreateResourceRequest) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`createResource`);
+        this.assertValidTenancyMode(request.tenantId);
         const { resourceType, resource, tenantId } = request;
-        const result = this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
-        newSubseg.close();
-        return result;
+        return this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
     }
 
     private async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`createResourceWithId`);
         const regex = new RegExp('^[a-zA-Z0-9-.]{1,64}$');
         if (!regex.test(resourceId)) {
             throw new InvalidResourceError(`Resource creation failed, id ${resourceId} is not valid`);
@@ -130,7 +143,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         try {
             await this.dynamoDb.putItem(param).promise();
         } catch (e) {
-            if (e.code === 'ConditionalCheckFailedException') {
+            if ((e as any).code === 'ConditionalCheckFailedException') {
                 // It is highly unlikely that an autogenerated id will collide with a preexisting id.
                 throw new Error('Resource creation failed, id matches an existing resource');
             }
@@ -138,7 +151,6 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
         const item = DynamoDBConverter.unmarshall(param.Item);
         resourceClone = DynamoDbUtil.cleanItem(item);
-        newSubseg.close();
         return {
             success: true,
             message: 'Resource created',
@@ -147,19 +159,16 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async deleteResource(request: DeleteResourceRequest) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`deleteResource`);
+        this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.readResource({ resourceType, id, tenantId });
 
         const { versionId } = itemServiceResponse.resource.meta;
 
-        const result = this.deleteVersionedResource(resourceType, id, parseInt(versionId, 10), tenantId);
-        newSubseg.close();
-        return result;
+        return this.deleteVersionedResource(resourceType, id, parseInt(versionId, 10), tenantId);
     }
 
     async deleteVersionedResource(resourceType: string, id: string, vid: number, tenantId?: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`deleteVersionedResource`);
         const updateStatusToDeletedParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
             DOCUMENT_STATUS.AVAILABLE,
             DOCUMENT_STATUS.DELETED,
@@ -169,7 +178,6 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             tenantId,
         ).Update;
         await this.dynamoDb.updateItem(updateStatusToDeletedParam).promise();
-        newSubseg.close();
         return {
             success: true,
             message: `Successfully deleted ResourceType: ${resourceType}, Id: ${id}, VersionId: ${vid}`,
@@ -177,7 +185,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async updateResource(request: UpdateResourceRequest) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`updateResource`);
+        this.assertValidTenancyMode(request.tenantId);
         const { resource, resourceType, id, tenantId } = request;
         try {
             // Will throw ResourceNotFoundError if resource can't be found
@@ -194,7 +202,6 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             resourceType,
             id,
             resource: resourceClone,
-            tenantId,
         };
 
         // Sending the request to `atomicallyReadWriteResources` to take advantage of LOCKING management handled by
@@ -202,10 +209,10 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         const response: BundleResponse = await this.transactionService.transaction({
             requests: [batchRequest],
             startTime: new Date(),
+            tenantId,
         });
         const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
         resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
-        newSubseg.close();
         return {
             success: true,
             message: 'Resource updated',
@@ -214,40 +221,45 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async initiateExport(initiateExportRequest: InitiateExportRequest): Promise<string> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`initiateExport`);
-        await this.throttleExportRequestsIfNeeded(initiateExportRequest.requesterUserId);
+        this.assertValidTenancyMode(initiateExportRequest.tenantId);
+        await this.throttleExportRequestsIfNeeded(
+            initiateExportRequest.requesterUserId,
+            initiateExportRequest.tenantId,
+        );
         // Create new export job
-        const exportJob: BulkExportJob = buildExportJob(initiateExportRequest);
+        const exportJob: BulkExportJob = this.buildExportJob(initiateExportRequest);
 
         await startJobExecution(exportJob);
 
-        const params = DynamoDbParamBuilder.buildPutCreateExportRequest(exportJob);
+        const params = DynamoDbParamBuilder.buildPutCreateExportRequest(exportJob, initiateExportRequest);
         await this.dynamoDb.putItem(params).promise();
-        newSubseg.close();
         return exportJob.jobId;
     }
 
-    async throttleExportRequestsIfNeeded(requesterUserId: string) {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`throttleExportRequestsIfNeeded`);
+    async throttleExportRequestsIfNeeded(requesterUserId: string, tenantId?: string) {
         const jobStatusesToThrottle: ExportJobStatus[] = ['canceling', 'in-progress'];
         const exportJobItems = await this.getJobsWithExportStatuses(jobStatusesToThrottle);
 
         if (exportJobItems) {
-            const numberOfConcurrentUserRequest = exportJobItems.filter(item => {
+            const numberOfConcurrentUserRequest = exportJobItems.filter((item) => {
                 return DynamoDBConverter.unmarshall(item).jobOwnerId === requesterUserId;
             }).length;
+            let concurrentTenantRequest = exportJobItems;
+            if (tenantId) {
+                concurrentTenantRequest = exportJobItems.filter((item) => {
+                    return DynamoDBConverter.unmarshall(item).tenantId === tenantId;
+                });
+            }
             if (
                 numberOfConcurrentUserRequest >= this.MAXIMUM_CONCURRENT_REQUEST_PER_USER ||
-                exportJobItems.length >= this.MAXIMUM_SYSTEM_LEVEL_CONCURRENT_REQUESTS
+                concurrentTenantRequest.length >= this.MAXIMUM_SYSTEM_LEVEL_CONCURRENT_REQUESTS
             ) {
                 throw new TooManyConcurrentExportRequestsError();
             }
         }
-        newSubseg.close();
     }
 
     async getJobsWithExportStatuses(jobStatuses: ExportJobStatus[]): Promise<ItemList> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`getJobsWithExportStatuses`);
         const jobStatusPromises = jobStatuses.map((jobStatus: ExportJobStatus) => {
             const projectionExpression = 'jobOwnerId, jobStatus';
             const queryJobStatusParam = DynamoDbParamBuilder.buildQueryExportRequestJobStatus(
@@ -264,13 +276,12 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
                 allJobStatusItems = allJobStatusItems.concat(jobStatusResponse.Items);
             }
         });
-        newSubseg.close();
         return allJobStatusItems;
     }
 
-    async cancelExport(jobId: string): Promise<void> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`cancelExport`);
-        const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId);
+    async cancelExport(jobId: string, tenantId?: string): Promise<void> {
+        this.assertValidTenancyMode(tenantId);
+        const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId, tenantId);
         const jobDetailsResponse = await this.dynamoDb.getItem(jobDetailsParam).promise();
         if (!jobDetailsResponse.Item) {
             throw new ResourceNotFoundError('$export', jobId);
@@ -281,18 +292,16 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
         // A job in the canceled or canceling state doesn't need to be updated to 'canceling'
         if (['canceled', 'canceling'].includes(jobItem.jobStatus)) {
-            newSubseg.close();
             return;
         }
 
-        const params = DynamoDbParamBuilder.buildUpdateExportRequestJobStatus(jobId, 'canceling');
+        const params = DynamoDbParamBuilder.buildUpdateExportRequestJobStatus(jobId, 'canceling', tenantId);
         await this.dynamoDb.updateItem(params).promise();
-        newSubseg.close();
     }
 
-    async getExportStatus(jobId: string): Promise<GetExportStatusResponse> {
-        const newSubseg = AWSXRay.getSegment().addNewSubsegment(`getExportStatus`);
-        const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId);
+    async getExportStatus(jobId: string, tenantId?: string): Promise<GetExportStatusResponse> {
+        this.assertValidTenancyMode(tenantId);
+        const jobDetailsParam = DynamoDbParamBuilder.buildGetExportRequestJob(jobId, tenantId);
         const jobDetailsResponse = await this.dynamoDb.getItem(jobDetailsParam).promise();
         if (!jobDetailsResponse.Item) {
             throw new ResourceNotFoundError('$export', jobId);
@@ -313,12 +322,16 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             errorMessage = '',
         } = item;
 
-        const exportedFileUrls = jobStatus === 'completed' ? await getBulkExportResults(jobId) : [];
+        const results: { requiresAccessToken?: boolean; exportedFileUrls: { type: string; url: string }[] } =
+            jobStatus === 'completed'
+                ? await getBulkExportResults(this.bulkExportResultsUrlGenerator, jobId, tenantId)
+                : { requiresAccessToken: undefined, exportedFileUrls: [] };
 
         const getExportStatusResponse: GetExportStatusResponse = {
             jobOwnerId,
             jobStatus,
-            exportedFileUrls,
+            requiresAccessToken: results.requiresAccessToken,
+            exportedFileUrls: results.exportedFileUrls,
             transactionTime,
             exportType,
             outputFormat,
@@ -328,8 +341,48 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             errorArray,
             errorMessage,
         };
-        newSubseg.close();
+
         return getExportStatusResponse;
+    }
+
+    buildExportJob(initiateExportRequest: InitiateExportRequest): BulkExportJob {
+        const initialStatus: ExportJobStatus = 'in-progress';
+        const uuid = uuidv4();
+        // Combine allowedResourceTypes and user input parameter type before pass to Glue job
+        let type = initiateExportRequest.allowedResourceTypes.join(',');
+        if (initiateExportRequest.type) {
+            // If the types user requested are not a subset of allowed types, reject
+            if (
+                difference(initiateExportRequest.type.split(','), initiateExportRequest.allowedResourceTypes).length !==
+                0
+            ) {
+                throw new UnauthorizedError('User does not have permission for requested resource type.');
+            }
+            type = initiateExportRequest.type;
+        }
+        const exportJob: BulkExportJob = {
+            jobId: uuid,
+            jobOwnerId: initiateExportRequest.requesterUserId,
+            exportType: initiateExportRequest.exportType,
+            groupId: initiateExportRequest.groupId ?? '',
+            serverUrl: initiateExportRequest.serverUrl ?? '',
+            outputFormat: initiateExportRequest.outputFormat ?? 'ndjson',
+            since: initiateExportRequest.since ?? '1800-01-01T00:00:00.000Z', // Default to a long time ago in the past
+            type,
+            transactionTime: initiateExportRequest.transactionTime,
+            jobStatus: initialStatus,
+            jobFailedMessage: '',
+        };
+        if (this.enableMultiTenancy) {
+            exportJob.tenantId = initiateExportRequest.tenantId;
+        }
+        if (initiateExportRequest.groupId) {
+            exportJob.compartmentSearchParamFile =
+                initiateExportRequest.fhirVersion === '4.0.1'
+                    ? process.env.PATIENT_COMPARTMENT_V4
+                    : process.env.PATIENT_COMPARTMENT_V3;
+        }
+        return exportJob;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

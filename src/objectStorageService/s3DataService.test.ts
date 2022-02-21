@@ -22,108 +22,135 @@ import validV3JpegBinary from '../../sampleData/validV3JpegBinary.json';
 import DynamoDbDataService from '../dataServices/__mocks__/dynamoDbDataService';
 import { S3DataService } from './s3DataService';
 
+import S3ObjectStorageService from './s3ObjectStorageService';
+
 jest.mock('./s3ObjectStorageService');
 
-async function runCreateV4Test(s3DataService: S3DataService, tenantId?: string) {
-    // BUILD
-    // OPERATE
-    const response = await s3DataService.createResource({
+describe('SUCCESS CASES: Testing create, read, update, delete of resources; version 4; multi-tenancy enabled', () => {
+    const binaryJsonWithGetUrl = {
         resourceType: 'Binary',
-        resource: validV4PdfBinary,
-        tenantId,
-    });
-    // CHECK
-    expect(response).toMatchObject({
-        success: true,
-        message: 'Resource created',
-        resource: {
-            resourceType: 'Binary',
-            contentType: 'application/pdf',
-            presignedPutUrl:
-                tenantId === undefined
-                    ? 'https://VALID_S3_PUT_URL.com/id_1.pdf'
-                    : `https://VALID_S3_PUT_URL.com/${tenantId}_id_1.pdf`,
+        contentType: 'application/pdf',
+        meta: {
+            versionId: '1',
+            lastUpdated: '2020-03-12T21:14:53.163Z',
         },
+        id: '3a8bce46-c8e0-4f1e-9821-32fbb6184234',
+        presignedPutUrl: 'https://S3_PUT_URL.com',
+    };
+
+    DynamoDbDataService.vReadResource = jest.fn(async (request: vReadResourceRequest) => {
+        const resourceCopy: any = { ...binaryJsonWithGetUrl };
+        resourceCopy.id = request.id;
+        resourceCopy.meta = generateMeta(request.vid);
+        return { success: true, message: 'Resource found', resource: resourceCopy };
+    });
+    DynamoDbDataService.readResource = jest.fn(async (request: ReadResourceRequest) => {
+        const resourceCopy: any = { ...binaryJsonWithGetUrl };
+        resourceCopy.id = request.id;
+        resourceCopy.meta = generateMeta('1');
+        return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 
-    expect(response.resource.data).toBeUndefined();
-    expect(response.resource.content).toBeUndefined();
-    expect(response.resource.id).toBeDefined();
-    expect(response.resource.meta).toBeDefined();
-}
-async function runReadV4Test(s3DataService: S3DataService, tenantId?: string) {
-    // BUILD
-    const id = 'id';
+    const s3DataService = new S3DataService(DynamoDbDataService, '4.0.1', { enableMultiTenancy: true });
 
-    // OPERATE
-    const readResponse = await s3DataService.readResource({ resourceType: 'Binary', id, tenantId });
-
-    // CHECK
-    expect(readResponse).toMatchObject({
-        message: 'Item found',
-        resource: {
+    test('create', async () => {
+        // BUILD
+        // OPERATE
+        const response = await s3DataService.createResource({
             resourceType: 'Binary',
-            contentType: 'application/pdf',
-            presignedGetUrl:
-                tenantId === undefined
-                    ? `https://VALID_S3_GET_URL.com/id_1.pdf`
-                    : `https://VALID_S3_GET_URL.com/${tenantId}_id_1.pdf`,
-        },
+            resource: validV4PdfBinary,
+            tenantId: 'tenant1',
+        });
+        // CHECK
+        expect(response).toMatchObject({
+            success: true,
+            message: 'Resource created',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'application/pdf',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/tenant1/id_1.pdf/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(response.resource.data).toBeUndefined();
+        expect(response.resource.content).toBeUndefined();
+        expect(response.resource.id).toBeDefined();
+        expect(response.resource.meta).toBeDefined();
     });
 
-    expect(readResponse.resource.data).toBeUndefined();
-    expect(readResponse.resource.content).toBeUndefined();
-    expect(readResponse.resource.id).toBeDefined();
-    expect(readResponse.resource.meta).toBeDefined();
-}
-async function runUpdateV4Test(s3DataService: S3DataService, tenantId?: string) {
-    // BUILD
-    const id = 'id';
+    test('read', async () => {
+        // BUILD
+        const id = 'id';
 
-    // OPERATE
-    const updateResponse = await s3DataService.updateResource({
-        resourceType: 'Binary',
-        id,
-        resource: validV4JpegBinary,
-        tenantId,
+        // OPERATE
+        const readResponse = await s3DataService.readResource({ resourceType: 'Binary', id, tenantId: 'tenant1' });
+
+        // CHECK
+        expect(readResponse).toMatchObject({
+            message: 'Item found',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'application/pdf',
+                presignedGetUrl: 'https://VALID_S3_GET_URL.com/tenant1/id_1.pdf/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(readResponse.resource.data).toBeUndefined();
+        expect(readResponse.resource.content).toBeUndefined();
+        expect(readResponse.resource.id).toBeDefined();
+        expect(readResponse.resource.meta).toBeDefined();
     });
 
-    // CHECK
-    expect(updateResponse).toMatchObject({
-        success: true,
-        message: 'Resource updated',
-        resource: {
+    test('update', async () => {
+        // BUILD
+        const id = 'id';
+
+        // OPERATE
+        const updateResponse = await s3DataService.updateResource({
             resourceType: 'Binary',
-            contentType: 'image/jpeg',
-            presignedPutUrl:
-                tenantId === undefined
-                    ? `https://VALID_S3_PUT_URL.com/id_2.jpeg`
-                    : `https://VALID_S3_PUT_URL.com/${tenantId}_id_2.jpeg`,
-        },
+            id,
+            resource: validV4JpegBinary,
+            tenantId: 'tenant1',
+        });
+
+        // CHECK
+        expect(updateResponse).toMatchObject({
+            success: true,
+            message: 'Resource updated',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'image/jpeg',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/tenant1/id_2.jpeg/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(updateResponse.resource.data).toBeUndefined();
+        expect(updateResponse.resource.content).toBeUndefined();
+        expect(updateResponse.resource.id).toBeDefined();
+        expect(updateResponse.resource.meta).toBeDefined();
     });
 
-    expect(updateResponse.resource.data).toBeUndefined();
-    expect(updateResponse.resource.content).toBeUndefined();
-    expect(updateResponse.resource.id).toBeDefined();
-    expect(updateResponse.resource.meta).toBeDefined();
-}
-async function runDeleteV4Test(s3DataService: S3DataService, tenantId?: string) {
-    // BUILD
-    const id = 'id';
+    test('delete', async () => {
+        // BUILD
+        const id = 'id';
+        S3ObjectStorageService.deleteBasedOnPrefix = jest.fn();
 
-    // OPERATE
-    const deleteResponse: GenericResponse = await s3DataService.deleteResource({
-        resourceType: 'Binary',
-        id,
-        tenantId,
+        // OPERATE
+        const deleteResponse: GenericResponse = await s3DataService.deleteResource({
+            resourceType: 'Binary',
+            id,
+            tenantId: 'tenant1',
+        });
+        expect(deleteResponse).toMatchObject({
+            success: true,
+            message: 'Resource deleted',
+        });
+        // CHECK
+        expect(deleteResponse.resource).toBeUndefined();
+        expect(S3ObjectStorageService.deleteBasedOnPrefix).toHaveBeenCalledWith('tenant1/id');
     });
-    expect(deleteResponse).toMatchObject({
-        success: true,
-        message: 'Resource deleted',
-    });
-    // CHECK
-    expect(deleteResponse.resource).toBeUndefined();
-}
+});
+
 describe('SUCCESS CASES: Testing create, read, update, delete of resources; version 4', () => {
     const binaryJsonWithGetUrl = {
         resourceType: 'Binary',
@@ -133,7 +160,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources; vers
             lastUpdated: '2020-03-12T21:14:53.163Z',
         },
         id: '3a8bce46-c8e0-4f1e-9821-32fbb6184234',
-        presignedPutUrl: 'https://S3_PUT_URL.com/id_1.pdf',
+        presignedPutUrl: 'https://VALID_S3_GET_URL.com/id_1.pdf/VALID_TEMP_CREDENTIAL',
     };
 
     DynamoDbDataService.vReadResource = jest.fn(async (request: vReadResourceRequest) => {
@@ -152,64 +179,91 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources; vers
     const s3DataService = new S3DataService(DynamoDbDataService, '4.0.1');
 
     test('create', async () => {
-        await runCreateV4Test(s3DataService);
+        // BUILD
+        // OPERATE
+        const response = await s3DataService.createResource({ resourceType: 'Binary', resource: validV4PdfBinary });
+        // CHECK
+        expect(response).toMatchObject({
+            success: true,
+            message: 'Resource created',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'application/pdf',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_1.pdf/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(response.resource.data).toBeUndefined();
+        expect(response.resource.content).toBeUndefined();
+        expect(response.resource.id).toBeDefined();
+        expect(response.resource.meta).toBeDefined();
     });
 
     test('read', async () => {
-        await runReadV4Test(s3DataService);
+        // BUILD
+        const id = 'id';
+
+        // OPERATE
+        const readResponse = await s3DataService.readResource({ resourceType: 'Binary', id });
+
+        // CHECK
+        expect(readResponse).toMatchObject({
+            message: 'Item found',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'application/pdf',
+                presignedGetUrl: 'https://VALID_S3_GET_URL.com/id_1.pdf/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(readResponse.resource.data).toBeUndefined();
+        expect(readResponse.resource.content).toBeUndefined();
+        expect(readResponse.resource.id).toBeDefined();
+        expect(readResponse.resource.meta).toBeDefined();
     });
 
     test('update', async () => {
-        await runUpdateV4Test(s3DataService);
+        // BUILD
+        const id = 'id';
+
+        // OPERATE
+        const updateResponse = await s3DataService.updateResource({
+            resourceType: 'Binary',
+            id,
+            resource: validV4JpegBinary,
+        });
+
+        // CHECK
+        expect(updateResponse).toMatchObject({
+            success: true,
+            message: 'Resource updated',
+            resource: {
+                resourceType: 'Binary',
+                contentType: 'image/jpeg',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_2.jpeg/VALID_TEMP_CREDENTIAL',
+            },
+        });
+
+        expect(updateResponse.resource.data).toBeUndefined();
+        expect(updateResponse.resource.content).toBeUndefined();
+        expect(updateResponse.resource.id).toBeDefined();
+        expect(updateResponse.resource.meta).toBeDefined();
     });
 
     test('delete', async () => {
-        await runDeleteV4Test(s3DataService);
-    });
-});
+        // BUILD
+        const id = 'id';
+        S3ObjectStorageService.deleteBasedOnPrefix = jest.fn();
 
-describe('SUCCESS CASES: MULTI TENANCY: Testing create, read, update, delete of resources; version 4', () => {
-    const testTenantId = '9c7edea5-ab9f-4933-9845-9e915776d183';
-    const binaryJsonWithGetUrl = {
-        resourceType: 'Binary',
-        contentType: 'application/pdf',
-        meta: {
-            versionId: '1',
-            lastUpdated: '2020-03-12T21:14:53.163Z',
-        },
-        id: '3a8bce46-c8e0-4f1e-9821-32fbb6184234',
-        presignedPutUrl: `https://S3_PUT_URL.com/${testTenantId}_id_1.pdf`,
-    };
-
-    DynamoDbDataService.vReadResource = jest.fn(async (request: vReadResourceRequest) => {
-        const resourceCopy: any = { ...binaryJsonWithGetUrl };
-        resourceCopy.id = request.id;
-        resourceCopy.meta = generateMeta(request.vid);
-        return { success: true, message: 'Resource found', resource: resourceCopy };
-    });
-    DynamoDbDataService.readResource = jest.fn(async (request: ReadResourceRequest) => {
-        const resourceCopy: any = { ...binaryJsonWithGetUrl };
-        resourceCopy.id = request.id;
-        resourceCopy.meta = generateMeta('1');
-        return { success: true, message: 'Resource found', resource: resourceCopy };
-    });
-
-    const s3DataService = new S3DataService(DynamoDbDataService, '4.0.1');
-
-    test('create', async () => {
-        await runCreateV4Test(s3DataService, testTenantId);
-    });
-
-    test('read', async () => {
-        await runReadV4Test(s3DataService, testTenantId);
-    });
-
-    test('update', async () => {
-        await runUpdateV4Test(s3DataService, testTenantId);
-    });
-
-    test('delete', async () => {
-        await runDeleteV4Test(s3DataService, testTenantId);
+        // OPERATE
+        const deleteResponse: GenericResponse = await s3DataService.deleteResource({ resourceType: 'Binary', id });
+        expect(deleteResponse).toMatchObject({
+            success: true,
+            message: 'Resource deleted',
+        });
+        // CHECK
+        expect(deleteResponse.resource).toBeUndefined();
+        expect(S3ObjectStorageService.deleteBasedOnPrefix).toHaveBeenCalledWith('id');
     });
 });
 
@@ -222,7 +276,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources; vers
             lastUpdated: '2020-03-12T21:14:53.163Z',
         },
         id: '3a8bce46-c8e0-4f1e-9821-32fbb6184234',
-        presignedPutUrl: 'https://S3_PUT_URL.com/id_1.pdf',
+        presignedPutUrl: 'https://VALID_S3_GET_URL.com/id_1.pdf/VALID_TEMP_CREDENTIAL',
     };
 
     DynamoDbDataService.vReadResource = jest.fn(async (request: vReadResourceRequest) => {
@@ -252,7 +306,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources; vers
             resource: {
                 resourceType: 'Binary',
                 contentType: 'image/jpeg',
-                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_1.jpeg',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_1.jpeg/VALID_TEMP_CREDENTIAL',
             },
         });
 
@@ -280,7 +334,7 @@ describe('SUCCESS CASES: Testing create, read, update, delete of resources; vers
             resource: {
                 resourceType: 'Binary',
                 contentType: 'image/jpeg',
-                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_2.jpeg',
+                presignedPutUrl: 'https://VALID_S3_PUT_URL.com/id_2.jpeg/VALID_TEMP_CREDENTIAL',
             },
         });
 

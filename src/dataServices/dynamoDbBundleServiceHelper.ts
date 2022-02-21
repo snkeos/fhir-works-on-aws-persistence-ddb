@@ -10,7 +10,7 @@ import {
     TypeOperation,
     SystemOperation,
 } from 'fhir-works-on-aws-interface';
-import { DynamoDbUtil } from './dynamoDbUtil';
+import { buildHashKey, DynamoDbUtil } from './dynamoDbUtil';
 import DOCUMENT_STATUS from './documentStatus';
 import { DynamoDBConverter, RESOURCE_TABLE } from './dynamoDb';
 import DynamoDbParamBuilder from './dynamoDbParamBuilder';
@@ -18,14 +18,17 @@ import DynamoDbParamBuilder from './dynamoDbParamBuilder';
 export interface ItemRequest {
     id: string;
     vid?: number;
-    tenantId?: string;
     resourceType: string;
     operation: TypeOperation | SystemOperation;
     isOriginalUpdateItem?: boolean;
 }
 
 export default class DynamoDbBundleServiceHelper {
-    static generateStagingRequests(requests: BatchReadWriteRequest[], idToVersionId: Record<string, number>) {
+    static generateStagingRequests(
+        requests: BatchReadWriteRequest[],
+        idToVersionId: Record<string, number>,
+        tenantId?: string,
+    ) {
         const deleteRequests: any = [];
         const createRequests: any = [];
         const updateRequests: any = [];
@@ -34,7 +37,7 @@ export default class DynamoDbBundleServiceHelper {
         let newLocks: ItemRequest[] = [];
         let newBundleEntryResponses: BatchReadWriteResponse[] = [];
 
-        requests.forEach(request => {
+        requests.forEach((request) => {
             switch (request.operation) {
                 case 'create': {
                     // Add create request, put it in PENDING
@@ -49,7 +52,7 @@ export default class DynamoDbBundleServiceHelper {
                         id,
                         vid,
                         DOCUMENT_STATUS.PENDING,
-                        request.tenantId,
+                        tenantId,
                     );
 
                     createRequests.push({
@@ -58,15 +61,11 @@ export default class DynamoDbBundleServiceHelper {
                             Item: DynamoDBConverter.marshall(Item),
                         },
                     });
-                    const { stagingResponse, itemLocked } = this.addStagingResponseAndItemsLocked(
-                        request.operation,
-                        {
-                            ...request.resource,
-                            meta: { ...Item.meta },
-                            id,
-                        },
-                        request.tenantId,
-                    );
+                    const { stagingResponse, itemLocked } = this.addStagingResponseAndItemsLocked(request.operation, {
+                        ...request.resource,
+                        meta: { ...Item.meta },
+                        id,
+                    });
                     newBundleEntryResponses = newBundleEntryResponses.concat(stagingResponse);
                     newLocks = newLocks.concat(itemLocked);
                     break;
@@ -88,7 +87,7 @@ export default class DynamoDbBundleServiceHelper {
                         id,
                         vid,
                         DOCUMENT_STATUS.PENDING,
-                        request.tenantId,
+                        tenantId,
                     );
 
                     updateRequests.push({
@@ -98,22 +97,18 @@ export default class DynamoDbBundleServiceHelper {
                         },
                     });
 
-                    const { stagingResponse, itemLocked } = this.addStagingResponseAndItemsLocked(
-                        request.operation,
-                        {
-                            ...request.resource,
-                            meta: { ...Item.meta },
-                            id,
-                        },
-                        request.tenantId,
-                    );
+                    const { stagingResponse, itemLocked } = this.addStagingResponseAndItemsLocked(request.operation, {
+                        ...request.resource,
+                        meta: { ...Item.meta },
+                        id,
+                    });
                     newBundleEntryResponses = newBundleEntryResponses.concat(stagingResponse);
                     newLocks = newLocks.concat(itemLocked);
                     break;
                 }
                 case 'delete': {
                     // Mark documentStatus as PENDING_DELETE
-                    const { id, resourceType, tenantId } = request;
+                    const { id, resourceType } = request;
                     const vid = idToVersionId[id];
                     deleteRequests.push(
                         DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
@@ -137,14 +132,13 @@ export default class DynamoDbBundleServiceHelper {
                 }
                 case 'read': {
                     // Read the latest version with documentStatus = "LOCKED"
-                    const { tenantId } = request;
-                    const vid = idToVersionId[request.id];
-                    const id = DynamoDbUtil.buildItemId(request.id, tenantId);
+                    const { id } = request;
+                    const vid = idToVersionId[id];
                     readRequests.push({
                         Get: {
                             TableName: RESOURCE_TABLE,
                             Key: DynamoDBConverter.marshall({
-                                id,
+                                id: buildHashKey(id, tenantId),
                                 vid,
                             }),
                         },
@@ -175,10 +169,10 @@ export default class DynamoDbBundleServiceHelper {
         };
     }
 
-    static generateRollbackRequests(bundleEntryResponses: BatchReadWriteResponse[]) {
-        let itemsToRemoveFromLock: { id: string; vid: string; resourceType: string; tenantId?: string }[] = [];
+    static generateRollbackRequests(bundleEntryResponses: BatchReadWriteResponse[], tenantId?: string) {
+        let itemsToRemoveFromLock: { id: string; vid: string; resourceType: string }[] = [];
         let transactionRequests: any = [];
-        bundleEntryResponses.forEach(stagingResponse => {
+        bundleEntryResponses.forEach((stagingResponse) => {
             switch (stagingResponse.operation) {
                 case 'create':
                 case 'update': {
@@ -186,15 +180,13 @@ export default class DynamoDbBundleServiceHelper {
                         DELETE latest record
                         and remove lock entry from lockedItems
                      */
-                    const {
-                        transactionRequest,
-                        itemToRemoveFromLock,
-                    } = this.generateDeleteLatestRecordAndItemToRemoveFromLock(
-                        stagingResponse.resourceType,
-                        stagingResponse.id,
-                        stagingResponse.vid,
-                        stagingResponse.tenantId,
-                    );
+                    const { transactionRequest, itemToRemoveFromLock } =
+                        this.generateDeleteLatestRecordAndItemToRemoveFromLock(
+                            stagingResponse.resourceType,
+                            stagingResponse.id,
+                            stagingResponse.vid,
+                            tenantId,
+                        );
                     transactionRequests = transactionRequests.concat(transactionRequest);
                     itemsToRemoveFromLock = itemsToRemoveFromLock.concat(itemToRemoveFromLock);
                     break;
@@ -250,20 +242,18 @@ export default class DynamoDbBundleServiceHelper {
         return updatedStagingResponses;
     }
 
-    private static addStagingResponseAndItemsLocked(operation: TypeOperation, resource: any, tenantId?: string) {
+    private static addStagingResponseAndItemsLocked(operation: TypeOperation, resource: any) {
         const stagingResponse: BatchReadWriteResponse = {
             id: resource.id,
             vid: resource.meta.versionId,
             operation,
             lastModified: resource.meta.lastUpdated,
             resourceType: resource.resourceType,
-            tenantId,
             resource,
         };
         const itemLocked: ItemRequest = {
             id: resource.id,
             vid: parseInt(resource.meta.versionId, 10),
-            tenantId,
             resourceType: resource.resourceType,
             operation,
         };
