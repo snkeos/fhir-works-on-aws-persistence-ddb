@@ -73,10 +73,7 @@ export default class DynamoDbBundleServiceHelper {
                     // Create new entry with status = PENDING
                     // When updating a resource, create a new Document for that resource
                     // If availabe the id of the request shall be used (condition update use case)
-                    let { id } = request;
-                    if (!id) {
-                        id = request.resource.id;
-                    }
+                    const id = request.id || request.resource.id;
                     const vid = (idToVersionId[id] || 0) + 1;
                     const Item = DynamoDbUtil.prepItemForDdbInsert(
                         request.resource,
