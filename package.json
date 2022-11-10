@@ -20,7 +20,7 @@
     "lint-fix": "eslint --fix . --ext .ts,.tsx",
     "build": "tsc",
     "watch": "tsc -w",
-    "test": "jest --silent",
+    "test": "jest --silent --ci --testResultsProcessor=jest-junit",
     "test-coverage": "jest --coverage",
     "release": "yarn run build && yarn run lint && yarn run test",
     "clean": "rm -rf build/* node_modules/* dist/* .serverless/* .nyc_output/* lib/*",
@@ -61,6 +61,7 @@
     "eslint-plugin-prettier": "^4.0.0",
     "jest": "^26.6.3",
     "jest-each": "^26.4.2",
+    "jest-junit": "^14.0.1",
     "jest-mock-extended": "^1.0.8",
     "prettier": "^2.4.1",
     "sinon": "^9.2.2",
@@ -82,6 +83,11 @@
       "\\.(ts)$": "ts-jest"
     },
     "testRegex": ".test.ts"
+  },
+  "jest-junit": {
+    "suiteName": "jest test reports",
+    "outputDirectory": "./../test-reports",
+    "outputName": "fhir-works-on-aws-persistence-ddb-reports.xml"
   },
   "repository": {
     "type": "git",
