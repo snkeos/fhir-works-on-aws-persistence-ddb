@@ -534,7 +534,7 @@ describe('DELETE', () => {
         // CHECK
         expect(serviceResponse.success).toEqual(true);
         expect(serviceResponse.message).toEqual(
-            `Successfully deleted ResourceType: ${resourceType}, Id: ${id}, VersionId: ${vid}`,
+            `Successfully deleted resource Id: ${id}, VersionId: ${vid}`,
         );
     });
 });
