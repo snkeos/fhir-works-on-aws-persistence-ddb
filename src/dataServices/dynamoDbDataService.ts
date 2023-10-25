@@ -198,7 +198,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         await this.dynamoDb.deleteItem(deleteParamInput).promise();
         return {
             success: true,
-            message: `Succesfully deleted resource Id: ${id}, VersionId: ${vid}`
+            message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`
         }
     }
 

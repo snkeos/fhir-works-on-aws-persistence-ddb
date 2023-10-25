@@ -6,7 +6,13 @@
 // eslint-disable-next-line import/no-extraneous-dependencies
 import * as AWSMock from 'aws-sdk-mock';
 
-import { GetItemInput, PutItemInput, QueryInput, UpdateItemInput } from 'aws-sdk/clients/dynamodb';
+import {
+    GetItemInput,
+    PutItemInput,
+    QueryInput,
+    UpdateItemInput,
+    DeleteItemInput
+} from 'aws-sdk/clients/dynamodb';
 import AWS from 'aws-sdk';
 import isEqual from 'lodash/isEqual';
 // eslint-disable-next-line import/no-extraneous-dependencies
@@ -516,7 +522,7 @@ describe('DELETE', () => {
         });
 
         // UPDATE (delete) item (Success)
-        AWSMock.mock('DynamoDB', 'updateItem', (params: UpdateItemInput, callback: Function) => {
+        AWSMock.mock('DynamoDB', 'deleteItem', (params: DeleteItemInput, callback: Function) => {
             callback(null, {
                 Items: [DynamoDBConverter.marshall(resource)],
             });
