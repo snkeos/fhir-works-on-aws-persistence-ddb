@@ -195,6 +195,8 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
 
     async deleteVersionedResource(id: string, vid: number, tenantId?: string) {
         const deleteParamInput = DynamoDbParamBuilder.buildDeleteParam(id, vid, tenantId).Delete;
+        const dParams = JSON.stringify(deleteParamInput);
+        console.error(`>>> Delete Item with the params: ${dParams}`)
         await this.dynamoDb.deleteItem(deleteParamInput).promise();
         return {
             success: true,
