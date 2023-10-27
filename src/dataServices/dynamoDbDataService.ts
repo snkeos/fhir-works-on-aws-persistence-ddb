@@ -169,7 +169,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     // }
     //
     // async deleteVersionedResource(resourceType: string, id: string, vid: number, tenantId?: string) {
-    //     const updateStatusToDeletedParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
+    // const updateStatusToDeletedParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
     //         DOCUMENT_STATUS.AVAILABLE,
     //         DOCUMENT_STATUS.DELETED,
     //         id,
@@ -189,14 +189,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.readResource({ resourceType, id, tenantId })
         const { versionId } = itemServiceResponse.resource.meta;
-
-        return this.deleteVersionedResource(id, versionId, tenantId)
+        return this.deleteVersionedResource(id, parseInt(versionId, 10), tenantId)
     }
 
     async deleteVersionedResource(id: string, vid: number, tenantId?: string) {
         const deleteParamInput = DynamoDbParamBuilder.buildDeleteParam(id, vid, tenantId).Delete;
-        const dParams = JSON.stringify(deleteParamInput);
-        console.error(`>>> Delete Item with the params: ${dParams}`)
         await this.dynamoDb.deleteItem(deleteParamInput).promise();
         return {
             success: true,
