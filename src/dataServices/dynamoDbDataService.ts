@@ -158,38 +158,12 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         };
     }
 
-    // async deleteResource(request: DeleteResourceRequest) {
-    //     this.assertValidTenancyMode(request.tenantId);
-    //     const { resourceType, id, tenantId } = request;
-    //     const itemServiceResponse = await this.readResource({ resourceType, id, tenantId });
-    //
-    //     const { versionId } = itemServiceResponse.resource.meta;
-    //
-    //     return this.deleteVersionedResource(resourceType, id, parseInt(versionId, 10), tenantId);
-    // }
-    //
-    // async deleteVersionedResource(resourceType: string, id: string, vid: number, tenantId?: string) {
-    // const updateStatusToDeletedParam = DynamoDbParamBuilder.buildUpdateDocumentStatusParam(
-    //         DOCUMENT_STATUS.AVAILABLE,
-    //         DOCUMENT_STATUS.DELETED,
-    //         id,
-    //         vid,
-    //         resourceType,
-    //         tenantId,
-    //     ).Update;
-    //     await this.dynamoDb.updateItem(updateStatusToDeletedParam).promise();
-    //     return {
-    //         success: true,
-    //         message: `Successfully deleted ResourceType: ${resourceType}, Id: ${id}, VersionId: ${vid}`,
-    //     };
-    // }
-
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-        const itemServiceResponse = await this.readResource({ resourceType, id, tenantId })
+        const itemServiceResponse = await this.readResource({ resourceType, id, tenantId });
         const { versionId } = itemServiceResponse.resource.meta;
-        return this.deleteVersionedResource(id, parseInt(versionId, 10), tenantId)
+        return this.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
     }
 
     async deleteVersionedResource(id: string, vid: number, tenantId?: string) {
@@ -198,7 +172,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         return {
             success: true,
             message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`
-        }
+        };
     }
 
     async updateResource(request: UpdateResourceRequest) {
