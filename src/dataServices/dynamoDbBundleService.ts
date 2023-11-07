@@ -18,7 +18,7 @@ import {
     GenericResponse,
 } from 'fhir-works-on-aws-interface';
 import flatten from 'flat';
-import set from 'lodash/set';
+import { chunk, set } from 'lodash';
 import mapValues from 'lodash/mapValues';
 
 import DOCUMENT_STATUS from './documentStatus';
@@ -46,7 +46,7 @@ export class DynamoDbBundleService implements Bundle {
 
     readonly enableMultiTenancy: boolean;
 
-    private static readonly dynamoDbMaxTransactionBundleSize = 25;
+    private static readonly dynamoDbMaxTransactionBundleSize = 100;
 
     private readonly maxBatchSize: Number;
 
@@ -55,7 +55,7 @@ export class DynamoDbBundleService implements Bundle {
     /**
      *
      * @param dynamoDb
-     * @param supportUpdateCreate
+     * @param supportUpdateCreate - support upsert
      * @param maxExecutionTimeMs
      * @param options.enableMultiTenancy - whether or not to enable multi-tenancy. When enabled a tenantId is required for all requests.
      * @param options.versionedLinks Data structure to control for which resourceTypes (key) which references (array of paths) should be modified,
@@ -120,6 +120,7 @@ export class DynamoDbBundleService implements Bundle {
             requests,
             new DynamoDbHelper(this.dynamoDb),
             tenantId,
+            this.updateCreateSupported,
         );
         try {
             // loop through all requests and send in batches of MAX allowed requests
@@ -378,7 +379,14 @@ export class DynamoDbBundleService implements Bundle {
         let itemsLockedSuccessfully: ItemRequest[] = [];
         try {
             if (params.TransactItems.length > 0) {
-                await this.dynamoDb.transactWriteItems(params).promise();
+                const lockRequests = chunk(addLockRequests, this.MAX_TRANSACTION_SIZE).map((items) => {
+                    return this.dynamoDb
+                        .transactWriteItems({
+                            TransactItems: items,
+                        })
+                        .promise();
+                });
+                await Promise.all(lockRequests);
                 itemsLockedSuccessfully = itemsLockedSuccessfully.concat(lockedItems);
             }
             logger.info('Finished locking');
@@ -592,10 +600,15 @@ export class DynamoDbBundleService implements Bundle {
             return newLockedItems;
         }
         try {
-            const params = {
-                TransactItems: transactionRequests,
-            };
-            await this.dynamoDb.transactWriteItems(params).promise();
+            const writeRequests = chunk(transactionRequests, this.MAX_TRANSACTION_SIZE).map((items) => {
+                // @ts-ignore
+                return this.dynamoDb
+                    .transactWriteItems({
+                        TransactItems: items,
+                    })
+                    .promise();
+            });
+            await Promise.all(writeRequests);
             return newLockedItems;
         } catch (e) {
             logger.error('Failed to unstage items', e);
@@ -640,37 +653,40 @@ export class DynamoDbBundleService implements Bundle {
         // Order that Bundle specifies
         // https://www.hl7.org/fhir/http.html#trules
         const editRequests: any[] = [...deleteRequests, ...createRequests, ...updateRequests];
-        const writeParams =
-            editRequests.length > 0
-                ? {
-                      TransactItems: editRequests,
-                  }
-                : null;
-
-        const readParams =
-            readRequests.length > 0
-                ? {
-                      TransactItems: readRequests,
-                  }
-                : null;
-
         let batchReadWriteResponses: BatchReadWriteResponse[] = [];
         let allLockedItems: ItemRequest[] = lockedItems;
         try {
-            if (writeParams) {
-                await this.dynamoDb.transactWriteItems(writeParams).promise();
+            if (editRequests.length > 0) {
+                const writeChunkRequests = chunk(editRequests, this.MAX_TRANSACTION_SIZE).map((items) => {
+                    return this.dynamoDb
+                        .transactWriteItems({
+                            TransactItems: items,
+                        })
+                        .promise();
+                });
+                await Promise.all(writeChunkRequests);
             }
 
             // Keep track of items successfully staged
             allLockedItems = lockedItems.concat(newLocks);
             batchReadWriteResponses = batchReadWriteResponses.concat(newStagingResponses);
 
-            if (readParams) {
-                const readResult = await this.dynamoDb.transactGetItems(readParams).promise();
-                batchReadWriteResponses = DynamoDbBundleServiceHelper.populateBundleEntryResponseWithReadResult(
-                    batchReadWriteResponses,
-                    readResult,
-                );
+            if (readRequests.length > 0) {
+                const readChunkRequests = chunk(readRequests, this.MAX_TRANSACTION_SIZE).map((items) => {
+                    // @ts-ignore
+                    return this.dynamoDb
+                        .transactGetItems({
+                            TransactItems: items,
+                        })
+                        .promise();
+                });
+                const readResults = await Promise.all(readChunkRequests);
+                readResults.forEach((readResult) => {
+                    batchReadWriteResponses = DynamoDbBundleServiceHelper.populateBundleEntryResponseWithReadResult(
+                        batchReadWriteResponses,
+                        readResult,
+                    );
+                });
             }
 
             logger.info('Successfully staged items');
