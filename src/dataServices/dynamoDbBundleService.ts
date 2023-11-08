@@ -163,7 +163,7 @@ export class DynamoDbBundleService implements Bundle {
                 batchReadWriteResponses: [],
             };
         }
-
+        logger.info(`Transaction called for the following requests ${requests}`);
         // 1. Put a lock on all requests
         const lockItemsResponse = await this.lockItems(requests, tenantId);
         const { successfulLock } = lockItemsResponse;
