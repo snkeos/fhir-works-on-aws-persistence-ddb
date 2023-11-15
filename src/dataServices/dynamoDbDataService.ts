@@ -129,7 +129,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         return this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
     }
 
-    private async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
+    async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
         const regex = new RegExp('^[a-zA-Z0-9-.]{1,64}$');
         if (!regex.test(resourceId)) {
             throw new InvalidResourceError(`Resource creation failed, id ${resourceId} is not valid`);
@@ -171,7 +171,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         await this.dynamoDb.deleteItem(deleteParamInput).promise();
         return {
             success: true,
-            message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`
+            message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`,
         };
     }
 
@@ -187,6 +187,33 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             }
             throw e;
         }
+        const resourceClone = clone(resource);
+        const batchRequest: BatchReadWriteRequest = {
+            operation: 'update',
+            resourceType,
+            id,
+            resource: resourceClone,
+        };
+
+        // Sending the request to `atomicallyReadWriteResources` to take advantage of LOCKING management handled by
+        // that method
+        const response: BundleResponse = await this.transactionService.transaction({
+            requests: [batchRequest],
+            startTime: new Date(),
+            tenantId,
+        });
+        const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
+        resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
+        return {
+            success: true,
+            message: 'Resource updated',
+            resource: resourceClone,
+        };
+    }
+
+    async updateResourceWithOutCheck(request: UpdateResourceRequest) {
+        this.assertValidTenancyMode(request.tenantId);
+        const { resource, resourceType, id, tenantId } = request;
         const resourceClone = clone(resource);
         const batchRequest: BatchReadWriteRequest = {
             operation: 'update',
