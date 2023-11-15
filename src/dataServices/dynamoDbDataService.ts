@@ -211,9 +211,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         };
     }
 
-    async updateResourceWithOutCheck(request: UpdateResourceRequest) {
-        this.assertValidTenancyMode(request.tenantId);
-        const { resource, resourceType, id, tenantId } = request;
+    async updateResourceWithOutCheck(resourceType: string, resource: any, id: string, tenantId?: string) {
         const resourceClone = clone(resource);
         const batchRequest: BatchReadWriteRequest = {
             operation: 'update',

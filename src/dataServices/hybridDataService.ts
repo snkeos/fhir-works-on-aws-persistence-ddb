@@ -33,8 +33,17 @@ import { SEPARATOR } from '../constants';
 export const decode = (str: string): string => Buffer.from(str, 'base64').toString('utf-8');
 export const encode = (str: string): string => Buffer.from(str, 'utf-8').toString('base64');
 
+export type StripPayloadFunction = {
+    (resource: any): any;
+};
+
 export class HybridDataService implements Persistence, BulkDataAccess {
     updateCreateSupported: boolean = false;
+
+    private resourceTypesToStoreOnObjectStorage: Map<string, StripPayloadFunction> = new Map<
+        string,
+        StripPayloadFunction
+    >();
 
     readonly enableMultiTenancy: boolean;
 
@@ -45,6 +54,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
             const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
             resourceFromS3.meta = strippedResource.meta;
+            delete resourceFromS3.meta.source;
             return resourceFromS3;
         }
         return undefined;
@@ -62,6 +72,22 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     ) {
         this.dbPersistenceService = dbPersistenceService;
         this.enableMultiTenancy = enableMultiTenancy;
+    }
+
+    registerToStoreOnObjectStorage(resourceType: string, fn: StripPayloadFunction): void {
+        this.resourceTypesToStoreOnObjectStorage.set(resourceType, fn);
+    }
+
+    private shallStoreOnObjectStorage(resourceType: string): boolean {
+        return this.resourceTypesToStoreOnObjectStorage.has(resourceType);
+    }
+
+    private stripPayloadFromResource(resourceType: string, resource: any): any {
+        const func = this.resourceTypesToStoreOnObjectStorage.get(resourceType);
+        if (func) {
+            return func(resource);
+        }
+        return resource;
     }
 
     private assertValidTenancyMode(tenantId?: string) {
@@ -105,23 +131,29 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const newResourceId = uuidv4();
         const { resourceType, resource, tenantId } = request;
 
-        if (request.resourceType === `Questionnaire`) {
+        if (this.shallStoreOnObjectStorage(request.resourceType)) {
             const fileName = this.getPathName(newResourceId, uuidv4(), resourceType, tenantId);
 
             const resourceClone = clone(resource);
             resourceClone.id = newResourceId;
 
             // remove the main payload.
-            delete resource.item;
+            const strippedResource = this.stripPayloadFromResource(request.resourceType, resource);
 
-            if (!resource.meta) {
-                resource.meta = { source: fileName };
+            // link the s3 key to the stripped resource
+            if (!strippedResource.meta) {
+                strippedResource.meta = { source: fileName };
             } else {
-                resource.meta = { ...resource.meta, source: fileName };
+                strippedResource.meta = { ...strippedResource.meta, source: fileName };
             }
             try {
                 const [createResponse, s3UploadResult] = await Promise.all([
-                    this.dbPersistenceService.createResourceWithId(resourceType, resource, newResourceId, tenantId),
+                    this.dbPersistenceService.createResourceWithId(
+                        resourceType,
+                        strippedResource,
+                        newResourceId,
+                        tenantId,
+                    ),
                     S3ObjectStorageService.uploadObject(
                         encode(JSON.stringify(resourceClone)),
                         fileName,
@@ -136,7 +168,10 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                     resource: resourceClone,
                 };
             } catch (e) {
-                await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id: resource.id });
+                await this.dbPersistenceService.deleteResource({
+                    resourceType: request.resourceType,
+                    id: strippedResource.id,
+                });
                 throw e;
             }
         } else {
@@ -148,7 +183,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
 
-        if (request.resourceType === `Questionnaire`) {
+        if (this.shallStoreOnObjectStorage(request.resourceType)) {
             const getResponse = await this.dbPersistenceService.readResource(request);
             let fileName = '';
             if (getResponse.resource?.meta?.source) {
@@ -158,17 +193,18 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             }
             const resourceClone = clone(request.resource);
             // remove the main payload.
-            delete request.resource.item;
+            const strippedResource = this.stripPayloadFromResource(request.resourceType, request.resource);
 
-            if (!request.resource.meta) {
-                request.resource.meta = { source: fileName };
+            // link the s3 key to the stripped resource
+            if (!strippedResource.meta) {
+                strippedResource.meta = { source: fileName };
             } else {
-                request.resource.meta = { ...request.resource.meta, source: fileName };
+                strippedResource.meta = { ...strippedResource.meta, source: fileName };
             }
 
             try {
                 const [updateResponse, s3UploadResult] = await Promise.all([
-                    this.dbPersistenceService.updateResourceWithOutCheck(request),
+                    this.dbPersistenceService.updateResourceWithOutCheck(resourceType, strippedResource, id, tenantId),
                     S3ObjectStorageService.uploadObject(
                         encode(JSON.stringify(resourceClone)),
                         fileName,
