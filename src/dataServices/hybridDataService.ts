@@ -188,7 +188,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-        const itemServiceResponse = await this.readResource({ resourceType, id, tenantId });
+        const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
         const { versionId, source } = itemServiceResponse.resource.meta;
 
         if (source) {
