@@ -40,13 +40,20 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     private readonly dbPersistenceService: DynamoDbDataService;
 
+    private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
+        if (strippedResource?.meta?.source) {
+            const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
+            const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
+            resourceFromS3.meta = strippedResource.meta;
+            return resourceFromS3;
+        }
+        return undefined;
+    }
+
     static async cleanItemAndCompose(item: any) {
         const cleanedResource = DynamoDbUtil.cleanItem(item);
-        if (cleanedResource?.meta?.source) {
-            const readObjectResult = await S3ObjectStorageService.readObject(cleanedResource?.meta?.source);
-            return JSON.parse(decode(readObjectResult.message));
-        }
-        return cleanedResource;
+        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(cleanedResource);
+        return replaceObjectResult || cleanedResource;
     }
 
     constructor(
@@ -69,12 +76,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.readResource(request);
-
-        if (getResponse.resource?.meta?.source) {
-            const readObjectResult = await S3ObjectStorageService.readObject(getResponse.resource.meta.source);
+        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(getResponse.resource);
+        if (replaceObjectResult) {
             return {
                 message: getResponse.message,
-                resource: JSON.parse(decode(readObjectResult.message)),
+                resource: replaceObjectResult,
             };
         }
         return getResponse;
@@ -83,11 +89,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.vReadResource(request);
-        if (getResponse.resource?.meta?.source) {
-            const readObjectResult = await S3ObjectStorageService.readObject(getResponse.resource?.meta?.source);
+        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(getResponse.resource);
+        if (replaceObjectResult) {
             return {
                 message: getResponse.message,
-                resource: JSON.parse(decode(readObjectResult.message)),
+                resource: replaceObjectResult,
             };
         }
         return getResponse;
