@@ -34,8 +34,8 @@ import getComponentLogger from '../loggerBuilder';
 
 const logger = getComponentLogger();
 
-const decode = (str: string): string => Buffer.from(str, 'base64').toString('binary');
-const encode = (str: string): string => Buffer.from(str, 'binary').toString('base64');
+export const decode = (str: string): string => Buffer.from(str, 'base64').toString('binary');
+export const encode = (str: string): string => Buffer.from(str, 'binary').toString('base64');
 
 export class HybridDataService implements Persistence, BulkDataAccess {
     updateCreateSupported: boolean = false;
@@ -83,7 +83,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             try {
                 return {
                     message: getResponse.message,
-                    resource: JSON.parse(decode(readObjectResult.message)),
+                    resource: JSON.parse(readObjectResult.message),
                 };
             } catch (error) {
                 logger.log(`Failed to parse the resource from S3 ${error}`);
@@ -100,7 +100,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             const readObjectResult = await S3ObjectStorageService.readObject(getResponse.resource?.meta?.source);
             return {
                 message: getResponse.message,
-                resource: JSON.parse(decode(readObjectResult.message)),
+                resource: JSON.parse(readObjectResult.message),
             };
         }
         return getResponse;
@@ -129,11 +129,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             try {
                 const [createResponse, s3UploadResult] = await Promise.all([
                     this.dbPersistenceService.createResourceWithId(resourceType, resource, newResourceId, tenantId),
-                    S3ObjectStorageService.uploadObject(
-                        encode(JSON.stringify(resourceClone)),
-                        fileName,
-                        'application/json',
-                    ),
+                    S3ObjectStorageService.uploadObject(JSON.stringify(resourceClone), fileName, 'application/json'),
                 ]);
                 resourceClone.meta = createResponse.resource.meta;
                 assert(s3UploadResult.message, '');
