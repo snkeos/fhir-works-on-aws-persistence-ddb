@@ -30,10 +30,6 @@ import { DynamoDbUtil } from './dynamoDbUtil';
 import S3ObjectStorageService from '../objectStorageService/s3ObjectStorageService';
 import { SEPARATOR } from '../constants';
 
-import getComponentLogger from '../loggerBuilder';
-
-const logger = getComponentLogger();
-
 export const decode = (str: string): string => Buffer.from(str, 'base64').toString('utf-8');
 export const encode = (str: string): string => Buffer.from(str, 'utf-8').toString('base64');
 
@@ -75,20 +71,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const getResponse = await this.dbPersistenceService.readResource(request);
 
         if (getResponse.resource?.meta?.source) {
-            logger.log('Stripped resoure found');
-            logger.log(`Start loading resoure from: ${getResponse.resource.meta.source}`);
             const readObjectResult = await S3ObjectStorageService.readObject(getResponse.resource.meta.source);
-            logger.log(`${getResponse.resource.meta.source} loaded.`);
-
-            try {
-                return {
-                    message: getResponse.message,
-                    resource: JSON.parse(decode(readObjectResult.message)),
-                };
-            } catch (error) {
-                logger.log(`Failed to parse the resource from S3 ${error}`);
-                throw error;
-            }
+            return {
+                message: getResponse.message,
+                resource: JSON.parse(decode(readObjectResult.message)),
+            };
         }
         return getResponse;
     }
