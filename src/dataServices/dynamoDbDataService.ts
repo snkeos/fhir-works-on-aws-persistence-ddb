@@ -175,15 +175,6 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         };
     }
 
-    async deleteAllVersionsOfResource(id: string, tenantId?: string) {
-        const deleteParamInput = DynamoDbParamBuilder.buildDeleteAllVersionsParam(id, tenantId).Delete;
-        await this.dynamoDb.deleteItem(deleteParamInput).promise();
-        return {
-            success: true,
-            message: `Successfully deleted all versions of resource Id: ${id}`,
-        };
-    }
-
     async updateResource(request: UpdateResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resource, resourceType, id, tenantId } = request;

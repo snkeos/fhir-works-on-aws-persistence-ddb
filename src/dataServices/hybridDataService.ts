@@ -230,21 +230,17 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-
         const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
-        // const { versionId, source } = itemServiceResponse.resource.meta;
-        const { source } = itemServiceResponse.resource.meta;
+        const { versionId, source } = itemServiceResponse.resource.meta;
 
         if (source) {
             const [, deleteResponse] = await Promise.all([
                 S3ObjectStorageService.deleteObject(source),
-                // this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
-                this.dbPersistenceService.deleteAllVersionsOfResource(id, tenantId),
+                this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
             ]);
             return deleteResponse;
         }
-        return this.dbPersistenceService.deleteAllVersionsOfResource(id, tenantId);
-        // return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+        return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
