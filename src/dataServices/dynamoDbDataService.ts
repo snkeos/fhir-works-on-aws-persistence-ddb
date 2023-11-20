@@ -95,6 +95,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
     }
 
+    async readAllResources(request: ReadResourceRequest): Promise<GenericResponse> {
+        this.assertValidTenancyMode(request.tenantId);
+        return this.dynamoDbHelper.getAllResources(request.resourceType, request.id, request.tenantId);
+    }
+
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         return this.dynamoDbHelper.getMostRecentUserReadableResource(

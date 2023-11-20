@@ -230,6 +230,29 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
+        const itemServiceResponses = await this.dbPersistenceService.readAllResources({ resourceType, id, tenantId });
+
+        await itemServiceResponses.resource.forEach(async (element: any) => {
+            const { versionId, source } = element.meta;
+
+            if (source) {
+                const [, deleteResponse] = await Promise.all([
+                    S3ObjectStorageService.deleteObject(source),
+                    this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
+                ]);
+                return deleteResponse;
+            }
+            return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+        });
+        return {
+            success: true,
+            message: `Successfully deleted resource Id: ${id}`,
+        };
+    }
+
+    async deleteOldResource(request: DeleteResourceRequest) {
+        this.assertValidTenancyMode(request.tenantId);
+        const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
         const { versionId, source } = itemServiceResponse.resource.meta;
 
