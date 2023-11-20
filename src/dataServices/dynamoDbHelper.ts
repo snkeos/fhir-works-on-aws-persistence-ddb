@@ -50,19 +50,6 @@ export default class DynamoDbHelper {
         return items;
     }
 
-    async getAllResources(
-        resourceType: string,
-        id: string,
-        projectionExpression?: string,
-        tenantId?: string,
-    ): Promise<GenericResponse> {
-        const items = await this.getMostRecentResources(resourceType, id, 1000, projectionExpression, tenantId);
-        return {
-            message: 'Resource found',
-            resource: items.map((x) => DynamoDbUtil.cleanItem(x)),
-        };
-    }
-
     async getMostRecentResource(
         resourceType: string,
         id: string,

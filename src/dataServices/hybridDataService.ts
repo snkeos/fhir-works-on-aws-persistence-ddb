@@ -20,6 +20,7 @@ import {
     ConditionalDeleteResourceRequest,
     InitiateExportRequest,
     GetExportStatusResponse,
+    ResourceNotFoundError,
 } from 'fhir-works-on-aws-interface';
 
 import { Buffer } from 'buffer';
@@ -51,11 +52,15 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
         if (strippedResource?.meta?.source) {
-            const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
-            const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
-            resourceFromS3.meta = strippedResource.meta;
-            delete resourceFromS3.meta.source;
-            return resourceFromS3;
+            try {
+                const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
+                const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
+                resourceFromS3.meta = strippedResource.meta;
+                delete resourceFromS3.meta.source;
+                return resourceFromS3;
+            } catch (e) {
+                throw new ResourceNotFoundError(strippedResource.resourceType, strippedResource.id);
+            }
         }
         return undefined;
     }
@@ -136,9 +141,10 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
             const resourceClone = clone(resource);
             resourceClone.id = newResourceId;
+            const base64Data = encode(JSON.stringify(resourceClone));
 
             // remove the main payload.
-            const strippedResource = this.stripPayloadFromResource(request.resourceType, resource);
+            const strippedResource = this.stripPayloadFromResource(request.resourceType, clone(request.resource));
 
             // link the s3 key to the stripped resource
             if (!strippedResource.meta) {
@@ -154,11 +160,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                         newResourceId,
                         tenantId,
                     ),
-                    S3ObjectStorageService.uploadObject(
-                        encode(JSON.stringify(resourceClone)),
-                        fileName,
-                        'application/json',
-                    ),
+                    S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json'),
                 ]);
                 resourceClone.meta = createResponse.resource.meta;
                 assert(s3UploadResult.message, '');
@@ -187,8 +189,9 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             await this.dbPersistenceService.readResource(request);
             const fileName = this.getPathName(id, uuidv4(), resourceType, tenantId);
             const resourceClone = clone(request.resource);
+            const base64Data = encode(JSON.stringify(resourceClone));
             // remove the main payload.
-            const strippedResource = this.stripPayloadFromResource(request.resourceType, request.resource);
+            const strippedResource = this.stripPayloadFromResource(request.resourceType, clone(request.resource));
 
             // link the s3 key to the stripped resource
             if (!strippedResource.meta) {
@@ -200,11 +203,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             try {
                 const [updateResponse, s3UploadResult] = await Promise.all([
                     this.dbPersistenceService.updateResourceWithOutCheck(resourceType, strippedResource, id, tenantId),
-                    S3ObjectStorageService.uploadObject(
-                        encode(JSON.stringify(resourceClone)),
-                        fileName,
-                        'application/json',
-                    ),
+                    S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json'),
                 ]);
                 resourceClone.meta = updateResponse.resource.meta;
                 assert(s3UploadResult.message, '');
@@ -223,38 +222,6 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     }
 
     async deleteResource(request: DeleteResourceRequest) {
-        this.assertValidTenancyMode(request.tenantId);
-        const { resourceType, id, tenantId } = request;
-        const itemServiceResponses = await this.dbPersistenceService.readAllResourcesMetaData({
-            resourceType,
-            id,
-            tenantId,
-        });
-        console.log(`Found resources to delete: ${itemServiceResponses.resource.length}`);
-        await Promise.all(
-            itemServiceResponses.resource.map(async (element: any) => {
-                const { versionId, source } = element.meta;
-
-                console.log(`Found versionId to delete: ${versionId}`);
-                console.log(`Found source to delete: ${source}`);
-                if (source) {
-                    const [, deleteResponse] = await Promise.all([
-                        S3ObjectStorageService.deleteObject(source),
-                        this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
-                    ]);
-                    console.log(`Deleted version: ${deleteResponse.message}`);
-                    return deleteResponse;
-                }
-                return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
-            }),
-        );
-        return {
-            success: true,
-            message: `Successfully deleted resource Id: ${id}`,
-        };
-    }
-
-    async deleteOldResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
