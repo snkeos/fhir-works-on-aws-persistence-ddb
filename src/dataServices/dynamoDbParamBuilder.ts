@@ -131,6 +131,18 @@ export default class DynamoDbParamBuilder {
         return params;
     }
 
+    static buildDeleteAllVersionsParam(id: string, tenantId?: string) {
+        const params: any = {
+            Delete: {
+                TableName: RESOURCE_TABLE,
+                Key: DynamoDBConverter.marshall({
+                    id: buildHashKey(id, tenantId),
+                }),
+            },
+        };
+        return params;
+    }
+
     static buildGetItemParam(id: string, vid: number, tenantId?: string) {
         return {
             TableName: RESOURCE_TABLE,
