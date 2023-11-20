@@ -184,13 +184,8 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const { resourceType, id, tenantId } = request;
 
         if (this.shallStoreOnObjectStorage(request.resourceType)) {
-            const getResponse = await this.dbPersistenceService.readResource(request);
-            let fileName = '';
-            if (getResponse.resource?.meta?.source) {
-                fileName = getResponse.resource?.meta?.source;
-            } else {
-                fileName = this.getPathName(id, uuidv4(), resourceType, tenantId);
-            }
+            await this.dbPersistenceService.readResource(request);
+            const fileName = this.getPathName(id, uuidv4(), resourceType, tenantId);
             const resourceClone = clone(request.resource);
             // remove the main payload.
             const strippedResource = this.stripPayloadFromResource(request.resourceType, request.resource);
@@ -230,7 +225,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-        const itemServiceResponses = await this.dbPersistenceService.readAllResources({ resourceType, id, tenantId });
+        const itemServiceResponses = await this.dbPersistenceService.readAllResourcesMetaData({
+            resourceType,
+            id,
+            tenantId,
+        });
 
         await itemServiceResponses.resource.forEach(async (element: any) => {
             const { versionId, source } = element.meta;
