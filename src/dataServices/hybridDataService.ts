@@ -45,14 +45,17 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     private readonly dbPersistenceService: DynamoDbDataService;
 
     private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
+        console.log(`Enter replaceStrippedResourceWithS3Version`);
         if (strippedResource?.meta?.source) {
             try {
+                console.log(`replaceStrippedResourceWithS3Version load from S3: ${strippedResource.meta.source}`);
                 const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
                 const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
                 resourceFromS3.meta = strippedResource.meta;
                 delete resourceFromS3.meta.source;
                 return resourceFromS3;
             } catch (e) {
+                console.log(`replaceStrippedResourceWithS3Version failed: ${e.message}`);
                 throw new ResourceNotFoundError(strippedResource.resourceType, strippedResource.id);
             }
         }
