@@ -93,7 +93,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta(request.vid);
-        resourceCopy.meta.source = fileName;
+        resourceCopy.originalResourceUrl = fileName;
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 
@@ -109,7 +109,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta('1');
-        resourceCopy.meta.source = fileName;
+        resourceCopy.originalResourceUrl = fileName;
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 

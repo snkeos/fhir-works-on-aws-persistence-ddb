@@ -46,10 +46,12 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
         console.log(`Enter replaceStrippedResourceWithS3Version`);
-        if (strippedResource?.meta?.source) {
+        if (strippedResource?.originalResourceUrl) {
             try {
-                console.log(`replaceStrippedResourceWithS3Version load from S3: ${strippedResource.meta.source}`);
-                const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.meta.source);
+                console.log(
+                    `replaceStrippedResourceWithS3Version load from S3: ${strippedResource.originalResourceUrl}`,
+                );
+                const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.originalResourceUrl);
                 const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
                 resourceFromS3.meta = strippedResource.meta;
                 delete resourceFromS3.meta.source;
@@ -162,11 +164,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             const strippedResource = this.stripPayloadFromResource(resourceType, resourceClone);
 
             // link the s3 key to the stripped resource
-            if (!strippedResource.meta) {
-                strippedResource.meta = { source: fileName };
-            } else {
-                strippedResource.meta = { ...strippedResource.meta, source: fileName };
-            }
+            strippedResource.originalResourceUrl = fileName;
             try {
                 const [createResponse, s3UploadResult] = await Promise.all([
                     this.dbPersistenceService.createResourceWithIdNoClone(
@@ -216,12 +214,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             const strippedResource = this.stripPayloadFromResource(resourceType, resourceClone);
 
             // link the s3 key to the stripped resource
-            if (!strippedResource.meta) {
-                strippedResource.meta = { source: fileName };
-            } else {
-                strippedResource.meta = { ...strippedResource.meta, source: fileName };
-            }
-
+            strippedResource.originalResourceUrl = fileName;
             try {
                 const [updateResponse, s3UploadResult] = await Promise.all([
                     this.dbPersistenceService.updateResourceNoCheckNoClone(
@@ -252,11 +245,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
-        const { versionId, source } = itemServiceResponse.resource.meta;
-
-        if (source) {
+        const { versionId } = itemServiceResponse.resource.meta;
+        const { originalResourceUrl } = itemServiceResponse.resource;
+        if (originalResourceUrl) {
             const [, deleteResponse] = await Promise.all([
-                S3ObjectStorageService.deleteObject(source),
+                S3ObjectStorageService.deleteObject(originalResourceUrl),
                 this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
             ]);
             return deleteResponse;
