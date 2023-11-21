@@ -130,16 +130,26 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
     }
 
     async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
+        return this.createResourceWithIdNoClone(resourceType, clone(resource), resourceId, tenantId);
+    }
+
+    async createResourceWithIdNoClone(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
         const regex = new RegExp('^[a-zA-Z0-9-.]{1,64}$');
         if (!regex.test(resourceId)) {
             throw new InvalidResourceError(`Resource creation failed, id ${resourceId} is not valid`);
         }
 
         const vid = 1;
-        let resourceClone = clone(resource);
-        resourceClone.resourceType = resourceType;
+        let resourceShallowCopy = resource;
+        resourceShallowCopy.resourceType = resourceType;
 
-        const param = DynamoDbParamBuilder.buildPutAvailableItemParam(resourceClone, resourceId, vid, false, tenantId);
+        const param = DynamoDbParamBuilder.buildPutAvailableItemParam(
+            resourceShallowCopy,
+            resourceId,
+            vid,
+            false,
+            tenantId,
+        );
         try {
             await this.dynamoDb.putItem(param).promise();
         } catch (e) {
@@ -150,11 +160,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             throw e;
         }
         const item = DynamoDBConverter.unmarshall(param.Item);
-        resourceClone = DynamoDbUtil.cleanItem(item);
+        resourceShallowCopy = DynamoDbUtil.cleanItem(item);
         return {
             success: true,
             message: 'Resource created',
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
     }
 
@@ -187,37 +197,16 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             }
             throw e;
         }
-        const resourceClone = clone(resource);
-        const batchRequest: BatchReadWriteRequest = {
-            operation: 'update',
-            resourceType,
-            id,
-            resource: resourceClone,
-        };
-
-        // Sending the request to `atomicallyReadWriteResources` to take advantage of LOCKING management handled by
-        // that method
-        const response: BundleResponse = await this.transactionService.transaction({
-            requests: [batchRequest],
-            startTime: new Date(),
-            tenantId,
-        });
-        const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
-        resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
-        return {
-            success: true,
-            message: 'Resource updated',
-            resource: resourceClone,
-        };
+        return this.updateResourceNoCheckNoClone(resourceType, clone(resource), id, tenantId);
     }
 
-    async updateResourceWithOutCheck(resourceType: string, resource: any, id: string, tenantId?: string) {
-        const resourceClone = clone(resource);
+    async updateResourceNoCheckNoClone(resourceType: string, resource: any, id: string, tenantId?: string) {
+        const resourceShallowCopy = resource;
         const batchRequest: BatchReadWriteRequest = {
             operation: 'update',
             resourceType,
             id,
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
 
         // Sending the request to `atomicallyReadWriteResources` to take advantage of LOCKING management handled by
@@ -228,11 +217,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             tenantId,
         });
         const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
-        resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
+        resourceShallowCopy.meta = batchReadWriteEntryResponse.resource.meta;
         return {
             success: true,
             message: 'Resource updated',
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
     }
 

@@ -69,7 +69,7 @@ class TestObjectStorage {
 
 function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileName: string): void {
     // eslint-disable-next-line no-param-reassign
-    dynamoDbDataService.createResourceWithId = jest.fn(
+    dynamoDbDataService.createResourceWithIdNoClone = jest.fn(
         async (resourceType: string, resource: any, resourceId: string, tenantId?: string) => {
             const resourceCopy: any = { ...resource };
             resourceCopy.id = resourceId;
@@ -114,7 +114,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
     });
 
     // eslint-disable-next-line no-param-reassign
-    dynamoDbDataService.updateResourceWithOutCheck = jest.fn(
+    dynamoDbDataService.updateResourceNoCheckNoClone = jest.fn(
         async (resourceType: string, resource: any, id: string, tenantId?: string) => {
             const resourceCopy: any = { ...resource };
             return {
@@ -168,11 +168,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
 
         const tenantId = '1111';
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
         {
             // Store Patient
             const serviceResponse = await hybridDataService.createResource({
@@ -204,11 +200,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
         const tenantId = '1111';
 
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
         {
             const resourceId = '123456';
             // Read Patient
@@ -276,11 +268,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
 
         const tenantId = '1111';
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
         {
             // Store large Questionnaire
             const serviceResponse = await hybridDataService.createResource({
@@ -313,11 +301,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
         const tenantId = '1111';
 
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
         {
             await TestObjectStorage.uploadObject(
                 encode(JSON.stringify(vaildV4Questionnaire)),
@@ -356,11 +340,7 @@ describe('ERROR CASES: Store registered resources on DDB and S3', () => {
         const tenantId = '1111';
 
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
         const resourceId = '98765';
         try {
             // Read large Questionnaire
@@ -383,11 +363,7 @@ describe('ERROR CASES: Store registered resources on DDB and S3', () => {
 
         const tenantId = '1111';
         const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
-        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, (resource: any): any => {
-            // eslint-disable-next-line no-param-reassign
-            delete resource.item;
-            return resource;
-        });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
 
         try {
             // Store large Questionnaire
