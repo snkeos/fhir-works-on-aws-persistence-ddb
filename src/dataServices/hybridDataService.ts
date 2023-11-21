@@ -45,11 +45,10 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     private readonly dbPersistenceService: DynamoDbDataService;
 
     private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
-        console.log(`Enter replaceStrippedResourceWithS3Version`);
         if (strippedResource?.originalResourceUrl) {
             try {
                 console.log(
-                    `replaceStrippedResourceWithS3Version load from S3: ${strippedResource.originalResourceUrl}`,
+                    `Load ${strippedResource.resourceType}: ${strippedResource.id} from S3: ${strippedResource.originalResourceUrl}`,
                 );
                 const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.originalResourceUrl);
                 const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
@@ -57,7 +56,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 delete resourceFromS3.meta.source;
                 return resourceFromS3;
             } catch (e) {
-                console.log(`replaceStrippedResourceWithS3Version failed`);
+                console.log(`Load ${strippedResource.resourceType}: ${strippedResource.id} from S3 failed`);
                 throw new ResourceNotFoundError(strippedResource.resourceType, strippedResource.id);
             }
         }
@@ -166,17 +165,15 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             // link the s3 key to the stripped resource
             strippedResource.originalResourceUrl = fileName;
             try {
-                const [createResponse, s3UploadResult] = await Promise.all([
-                    this.dbPersistenceService.createResourceWithIdNoClone(
-                        resourceType,
-                        strippedResource,
-                        resourceId,
-                        tenantId,
-                    ),
-                    S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json'),
-                ]);
+                // Ensure the order: first S3 then ddb to avoid possible data races
+                await S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json');
+                const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
+                    resourceType,
+                    strippedResource,
+                    resourceId,
+                    tenantId,
+                );
                 resourceClone.meta = createResponse.resource.meta;
-                assert(s3UploadResult.message, '');
                 return {
                     success: createResponse.success,
                     message: createResponse.message,
@@ -216,17 +213,16 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             // link the s3 key to the stripped resource
             strippedResource.originalResourceUrl = fileName;
             try {
-                const [updateResponse, s3UploadResult] = await Promise.all([
-                    this.dbPersistenceService.updateResourceNoCheckNoClone(
-                        resourceType,
-                        strippedResource,
-                        id,
-                        tenantId,
-                    ),
-                    S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json'),
-                ]);
+                // Ensure the order: first S3 then ddb to avoid possible data races
+                S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json');
+                const updateResponse = await this.dbPersistenceService.updateResourceNoCheckNoClone(
+                    resourceType,
+                    strippedResource,
+                    id,
+                    tenantId,
+                );
                 resourceClone.meta = updateResponse.resource.meta;
-                assert(s3UploadResult.message, '');
+
                 return {
                     success: updateResponse.success,
                     message: updateResponse.message,
