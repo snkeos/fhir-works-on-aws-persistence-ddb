@@ -55,7 +55,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 delete resourceFromS3.meta.source;
                 return resourceFromS3;
             } catch (e) {
-                console.log(`replaceStrippedResourceWithS3Version failed: ${e.message}`);
+                console.log(`replaceStrippedResourceWithS3Version failed`);
                 throw new ResourceNotFoundError(strippedResource.resourceType, strippedResource.id);
             }
         }
