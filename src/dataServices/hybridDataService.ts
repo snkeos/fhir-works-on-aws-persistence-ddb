@@ -65,8 +65,12 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     static async cleanItemAndCompose(item: any) {
         const cleanedResource = DynamoDbUtil.cleanItem(item);
-        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(cleanedResource);
-        return replaceObjectResult || cleanedResource;
+        try {
+            const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(cleanedResource);
+            return replaceObjectResult || cleanedResource;
+        } catch (e) {
+            return undefined;
+        }
     }
 
     constructor(
