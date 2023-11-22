@@ -51,7 +51,12 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 );
                 const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.originalResourceUrl);
                 const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
-                resourceFromS3.meta = strippedResource.meta;
+
+                Object.entries(strippedResource).forEach(([key, value]) => {
+                    if (key !== `originalResourceUrl`) {
+                        resourceFromS3[key] = value;
+                    }
+                });
                 return resourceFromS3;
             } catch (e) {
                 console.log(`Load ${strippedResource.resourceType}: ${strippedResource.id} from S3 failed`);
