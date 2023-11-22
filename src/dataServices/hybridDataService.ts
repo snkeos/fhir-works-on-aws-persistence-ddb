@@ -95,9 +95,17 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         return this.resourceTypesToStoreOnObjectStorage.has(resourceType);
     }
 
-    private separatePayloadFromResource(resourceType: string, resource: any, bulkDataLink: string): any {
+    private separatePayloadFromResource(
+        resourceType: string,
+        resource: any,
+        resourceId: string,
+        tenantId?: string,
+    ): any {
         const attributes = this.resourceTypesToStoreOnObjectStorage.get(resourceType);
         if (attributes) {
+            // Create a link for S3 object storage
+            const bulkDataLink = this.getPathName(resourceId, uuidv4(), resourceType, tenantId);
+
             // This code shall reduce the cloning overhead, by temporary remove the main payload.
             const attributesToRestore = attributes.map((element) => {
                 const payload = resource[element];
@@ -120,8 +128,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             });
             // link the s3 key to the stripped resource
             resourceClone.bulkDataLink = bulkDataLink;
-
-            return { resource: resourceClone, bulkData };
+            return {
+                resource: resourceClone,
+                bulkDataLink,
+                bulkData: encode(JSON.stringify(bulkData)),
+            };
         }
         return { resource };
     }
@@ -169,23 +180,30 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
         if (this.shallStoreOnObjectStorage(resourceType)) {
-
             const resourceClone = clone(resource);
             resourceClone.id = resourceId;
 
-            const bulkLink = this.getPathName(resourceId, uuidv4(), resourceType, tenantId);
             // Separate the main payload from the resource.
-            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, bulkLink);
+            const separatedResourceData = this.separatePayloadFromResource(
+                resourceType,
+                resourceClone,
+                resourceId,
+                tenantId,
+            );
             try {
-                const base64Data = encode(JSON.stringify(separatedResourceData.bulkData));
                 // Ensure the order: first S3 then ddb to avoid possible data races
-                await S3ObjectStorageService.uploadObject(base64Data, bulkLink, 'application/json');
+                await S3ObjectStorageService.uploadObject(
+                    separatedResourceData.bulkData,
+                    separatedResourceData.bulkDataLink,
+                    'application/json',
+                );
                 const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
                     resourceType,
                     separatedResourceData.resource,
                     resourceId,
                     tenantId,
                 );
+                // Update the meta data
                 resourceClone.meta = createResponse.resource.meta;
                 return {
                     success: createResponse.success,
@@ -218,20 +236,22 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 throw e;
             }
             const resourceClone = clone(resource);
-            const bulkLink = this.getPathName(id, uuidv4(), resourceType, tenantId);
-
             // Separate the main payload from the resource.
-            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, bulkLink);
+            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, id, tenantId);
             try {
-                const base64Data = encode(JSON.stringify(separatedResourceData.bulkData));
                 // Ensure the order: first S3 then ddb to avoid possible data races
-                await S3ObjectStorageService.uploadObject(base64Data, bulkLink, 'application/json');
+                await S3ObjectStorageService.uploadObject(
+                    separatedResourceData.bulkData,
+                    separatedResourceData.bulkDataLink,
+                    'application/json',
+                );
                 const updateResponse = await this.dbPersistenceService.updateResourceNoCheckNoClone(
                     resourceType,
                     separatedResourceData.resource,
                     id,
                     tenantId,
                 );
+                // Update the meta data
                 resourceClone.meta = updateResponse.resource.meta;
 
                 return {
