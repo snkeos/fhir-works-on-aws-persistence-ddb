@@ -114,7 +114,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
     });
 
     // eslint-disable-next-line no-param-reassign
-    dynamoDbDataService.updateResourceNoCheckNoClone = jest.fn(
+    dynamoDbDataService.updateResourceNoCheckForExistenceNoClone = jest.fn(
         async (resourceType: string, resource: any, id: string, tenantId?: string) => {
             const resourceCopy: any = { ...resource };
             return {

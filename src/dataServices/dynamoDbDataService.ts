@@ -197,10 +197,10 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             }
             throw e;
         }
-        return this.updateResourceNoCheckNoClone(resourceType, clone(resource), id, tenantId);
+        return this.updateResourceNoCheckForExistenceNoClone(resourceType, clone(resource), id, tenantId);
     }
 
-    async updateResourceNoCheckNoClone(resourceType: string, resource: any, id: string, tenantId?: string) {
+    async updateResourceNoCheckForExistenceNoClone(resourceType: string, resource: any, id: string, tenantId?: string) {
         const resourceShallowCopy = resource;
         const batchRequest: BatchReadWriteRequest = {
             operation: 'update',

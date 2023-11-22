@@ -41,7 +41,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     private readonly dbPersistenceService: DynamoDbDataService;
 
-    private static async composeResourceWithS3BulkData(resource: any): Promise<any | undefined> {
+    private static async composeResourceWithS3BulkData(resource: any): Promise<any> {
         if (resource?.bulkDataLink) {
             try {
                 const readObjectResult = await S3ObjectStorageService.readObject(resource.bulkDataLink);
@@ -62,16 +62,12 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 throw new ResourceNotFoundError(resource.resourceType, resource.id);
             }
         }
-        return undefined;
+        return resource;
     }
 
     static async composeResource(resource: any): Promise<any> {
         try {
-            const replaceObjectResult = await HybridDataService.composeResourceWithS3BulkData(resource);
-            if (replaceObjectResult) {
-                return replaceObjectResult;
-            }
-            return resource;
+            return await HybridDataService.composeResourceWithS3BulkData(resource);
         } catch (e) {
             return resource;
         }
@@ -147,27 +143,19 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.readResource(request);
-        const composeResourceResult = await HybridDataService.composeResourceWithS3BulkData(getResponse.resource);
-        if (composeResourceResult) {
-            return {
-                message: getResponse.message,
-                resource: composeResourceResult,
-            };
-        }
-        return getResponse;
+        return {
+            message: getResponse.message,
+            resource: await HybridDataService.composeResourceWithS3BulkData(getResponse.resource),
+        };
     }
 
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.vReadResource(request);
-        const composeResourceResult = await HybridDataService.composeResourceWithS3BulkData(getResponse.resource);
-        if (composeResourceResult) {
-            return {
-                message: getResponse.message,
-                resource: composeResourceResult,
-            };
-        }
-        return getResponse;
+        return {
+            message: getResponse.message,
+            resource: await HybridDataService.composeResourceWithS3BulkData(getResponse.resource),
+        };
     }
 
     async createResource(request: CreateResourceRequest) {
@@ -177,92 +165,92 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     }
 
     async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
-        if (this.shallStoreOnObjectStorage(resourceType)) {
-            const resourceClone = clone(resource);
-            resourceClone.id = resourceId;
+        if (!this.shallStoreOnObjectStorage(resourceType)) {
+            return this.dbPersistenceService.createResourceWithId(resourceType, resource, resourceId, tenantId);
+        }
+        const resourceClone = clone(resource);
+        resourceClone.id = resourceId;
 
-            // Separate the main payload from the resource.
-            const separatedResourceData = this.separatePayloadFromResource(
+        // Separate the main payload from the resource.
+        const separatedResourceData = this.separatePayloadFromResource(
+            resourceType,
+            resourceClone,
+            resourceId,
+            tenantId,
+        );
+        try {
+            // Ensure the order: first S3 then ddb to avoid possible data races
+            await S3ObjectStorageService.uploadObject(
+                separatedResourceData.bulkData,
+                separatedResourceData.bulkDataLink,
+                'application/json',
+            );
+            const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
                 resourceType,
-                resourceClone,
+                separatedResourceData.resource,
                 resourceId,
                 tenantId,
             );
-            try {
-                // Ensure the order: first S3 then ddb to avoid possible data races
-                await S3ObjectStorageService.uploadObject(
-                    separatedResourceData.bulkData,
-                    separatedResourceData.bulkDataLink,
-                    'application/json',
-                );
-                const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
-                    resourceType,
-                    separatedResourceData.resource,
-                    resourceId,
-                    tenantId,
-                );
-                // Update the meta data
-                resourceClone.meta = createResponse.resource.meta;
-                return {
-                    success: createResponse.success,
-                    message: createResponse.message,
-                    resource: resourceClone,
-                };
-            } catch (e) {
-                await this.dbPersistenceService.deleteResource({
-                    resourceType,
-                    id: separatedResourceData.resource.id,
-                });
-                throw e;
-            }
-        } else {
-            return this.dbPersistenceService.createResourceWithId(resourceType, resource, resourceId, tenantId);
+            // Update the meta data
+            resourceClone.meta = createResponse.resource.meta;
+            return {
+                success: createResponse.success,
+                message: createResponse.message,
+                resource: resourceClone,
+            };
+        } catch (e) {
+            console.log(`Creation of ${resource.resourceType}: ${resource.id} has failed`);
+            await this.dbPersistenceService.deleteResource({
+                resourceType,
+                id: separatedResourceData.resource.id,
+            });
+            throw e;
         }
     }
 
     async updateResource(request: UpdateResourceRequest) {
-        if (this.shallStoreOnObjectStorage(request.resourceType)) {
-            this.assertValidTenancyMode(request.tenantId);
-            const { resourceType, resource, id, tenantId } = request;
-            try {
-                // Will throw ResourceNotFoundError if resource can't be found
-                await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
-            } catch (e) {
-                if (this.updateCreateSupported && isResourceNotFoundError(e)) {
-                    return this.createResourceWithId(resourceType, resource, id, tenantId);
-                }
-                throw e;
-            }
-            const resourceClone = clone(resource);
-            // Separate the main payload from the resource.
-            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, id, tenantId);
-            try {
-                // Ensure the order: first S3 then ddb to avoid possible data races
-                await S3ObjectStorageService.uploadObject(
-                    separatedResourceData.bulkData,
-                    separatedResourceData.bulkDataLink,
-                    'application/json',
-                );
-                const updateResponse = await this.dbPersistenceService.updateResourceNoCheckNoClone(
-                    resourceType,
-                    separatedResourceData.resource,
-                    id,
-                    tenantId,
-                );
-                // Update the meta data
-                resourceClone.meta = updateResponse.resource.meta;
-
-                return {
-                    success: updateResponse.success,
-                    message: updateResponse.message,
-                    resource: resourceClone,
-                };
-            } catch (e) {
-                await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id });
-                throw e;
-            }
-        } else {
+        if (!this.shallStoreOnObjectStorage(request.resourceType)) {
             return this.dbPersistenceService.updateResource(request);
+        }
+        this.assertValidTenancyMode(request.tenantId);
+        const { resourceType, resource, id, tenantId } = request;
+        try {
+            // Will throw ResourceNotFoundError if resource can't be found
+            await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
+        } catch (e) {
+            if (this.updateCreateSupported && isResourceNotFoundError(e)) {
+                return this.createResourceWithId(resourceType, resource, id, tenantId);
+            }
+            throw e;
+        }
+        const resourceClone = clone(resource);
+        // Separate the main payload from the resource.
+        const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, id, tenantId);
+        try {
+            // Ensure the order: first S3 then ddb to avoid possible data races
+            await S3ObjectStorageService.uploadObject(
+                separatedResourceData.bulkData,
+                separatedResourceData.bulkDataLink,
+                'application/json',
+            );
+            const updateResponse = await this.dbPersistenceService.updateResourceNoCheckForExistenceNoClone(
+                resourceType,
+                separatedResourceData.resource,
+                id,
+                tenantId,
+            );
+            // Update the meta data
+            resourceClone.meta = updateResponse.resource.meta;
+
+            return {
+                success: updateResponse.success,
+                message: updateResponse.message,
+                resource: resourceClone,
+            };
+        } catch (e) {
+            console.log(`Update of ${resource.resourceType}: ${resource.id} has failed`);
+            await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id });
+            throw e;
         }
     }
 
