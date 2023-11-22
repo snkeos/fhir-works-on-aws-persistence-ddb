@@ -67,10 +67,8 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     static async composeResource(resource: any): Promise<any> {
         try {
-            console.log(`Check for composing ${resource.resourceType}: ${resource.id}`);
             const replaceObjectResult = await HybridDataService.composeResourceWithS3BulkData(resource);
             if (replaceObjectResult) {
-                console.log(`...${resource.resourceType}: ${resource.id} composed.`);
                 return replaceObjectResult;
             }
             return resource;

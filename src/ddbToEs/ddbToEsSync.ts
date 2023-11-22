@@ -91,14 +91,12 @@ export class DdbToEsSync {
                     // eslint-disable-next-line no-continue
                     continue;
                 }
-                console.log(`Before: ${JSON.stringify(image)}`);
                 composedImages.push(composeResource(image, removeResource));
             }
 
             const composedImagesResults = await Promise.all(composedImages);
             composedImagesResults.forEach((comsposedImageStruct) => {
                 const { image, removeResource } = comsposedImageStruct;
-                console.log(`After: ${JSON.stringify(image)}`);
                 const alias = this.getAliasFn(image);
 
                 if (!this.knownAliases.has(alias.alias)) {
