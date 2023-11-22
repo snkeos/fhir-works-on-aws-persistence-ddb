@@ -84,16 +84,18 @@ export class DdbToEsSync {
                     // eslint-disable-next-line no-continue
                     continue;
                 }
-
+                if (!removeResource) {
+                    console.log(`Before: ${JSON.stringify(image)}`);
+                    // eslint-disable-next-line no-await-in-loop
+                    image = await HybridDataService.composeResource(image);
+                    console.log(`After: ${JSON.stringify(image)}`);
+                }
                 const alias = this.getAliasFn(image);
 
                 if (!this.knownAliases.has(alias.alias)) {
                     aliasesToCreate.push(alias);
                 }
-                if (!removeResource) {
-                    // eslint-disable-next-line no-await-in-loop
-                    image = await HybridDataService.composeResource(image);
-                }
+
                 const cmd = removeResource
                     ? this.ddbToEsHelper.createBulkESDelete(image, alias.alias)
                     : this.ddbToEsHelper.createBulkESUpsert(image, alias.alias);
