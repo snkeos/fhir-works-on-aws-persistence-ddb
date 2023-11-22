@@ -26,8 +26,6 @@ import {
 
 import { Buffer } from 'buffer';
 import { DynamoDbDataService } from './dynamoDbDataService';
-import { DynamoDbUtil } from './dynamoDbUtil';
-
 import S3ObjectStorageService from '../objectStorageService/s3ObjectStorageService';
 import { SEPARATOR } from '../constants';
 
@@ -43,50 +41,42 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     private readonly dbPersistenceService: DynamoDbDataService;
 
-    private static async replaceStrippedResourceWithS3Version(strippedResource: any): Promise<any | undefined> {
-        if (strippedResource?.originalResourceUrl) {
+    private static async composeResourceWithS3BulkData(resource: any): Promise<any | undefined> {
+        if (resource?.bulkDataLink) {
             try {
-                console.log(
-                    `Load ${strippedResource.resourceType}: ${strippedResource.id} from S3: ${strippedResource.originalResourceUrl}`,
-                );
-                const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.originalResourceUrl);
-                const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
-
-                Object.entries(strippedResource).forEach(([key, value]) => {
-                    if (key !== `originalResourceUrl`) {
-                        resourceFromS3[key] = value;
-                    }
-                });
-                return resourceFromS3;
+                console.log(`Load ${resource.resourceType}: ${resource.id} from S3: ${resource.bulkDataLink}`);
+                const readObjectResult = await S3ObjectStorageService.readObject(resource.bulkDataLink);
+                const bulkDataFromS3 = JSON.parse(decode(readObjectResult.message));
+                if (bulkDataFromS3.link === resource.bulkDataLink) {
+                    Object.entries(bulkDataFromS3.data).forEach(([key, value]) => {
+                        // eslint-disable-next-line no-param-reassign
+                        resource[key] = value;
+                    });
+                    // eslint-disable-next-line no-param-reassign
+                    delete resource.bulkDataLink;
+                    return resource;
+                }
+                console.log(`S3 bulk data does not match`);
+                throw new Error(`S3 bulk data does not match`);
             } catch (e) {
-                console.log(`Load ${strippedResource.resourceType}: ${strippedResource.id} from S3 failed`);
-                throw new ResourceNotFoundError(strippedResource.resourceType, strippedResource.id);
+                console.log(`Load ${resource.resourceType}: ${resource.id} from S3 failed`);
+                throw new ResourceNotFoundError(resource.resourceType, resource.id);
             }
         }
         return undefined;
     }
 
-    static async composeResource(strippedResource: any): Promise<any> {
+    static async composeResource(resource: any): Promise<any> {
         try {
-            console.log(`Check for composing ${strippedResource.resourceType}: ${strippedResource.id}`);
-            const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(strippedResource);
+            console.log(`Check for composing ${resource.resourceType}: ${resource.id}`);
+            const replaceObjectResult = await HybridDataService.composeResourceWithS3BulkData(resource);
             if (replaceObjectResult) {
-                console.log(`...${strippedResource.resourceType}: ${strippedResource.id} composed.`);
+                console.log(`...${resource.resourceType}: ${resource.id} composed.`);
                 return replaceObjectResult;
             }
-            return strippedResource;
+            return resource;
         } catch (e) {
-            return strippedResource;
-        }
-    }
-
-    static async cleanItemAndCompose(item: any) {
-        const cleanedResource = DynamoDbUtil.cleanItem(item);
-        try {
-            const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(cleanedResource);
-            return replaceObjectResult || cleanedResource;
-        } catch (e) {
-            return undefined;
+            return resource;
         }
     }
 
@@ -106,7 +96,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         return this.resourceTypesToStoreOnObjectStorage.has(resourceType);
     }
 
-    private stripPayloadFromResource(resourceType: string, resource: any): any {
+    private separatePayloadFromResource(resourceType: string, resource: any, bulkDataLink: string): any {
         const attributes = this.resourceTypesToStoreOnObjectStorage.get(resourceType);
         if (attributes) {
             // This code shall reduce the cloning overhead, by temporary remove the main payload.
@@ -121,14 +111,20 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             });
             // clone the temporary stripped resource
             const resourceClone = clone(resource);
-            // Resource the original JSON
+            const bulkData: any = { link: bulkDataLink, data: {} };
+            // Restore the original JSON and fill the bulk data structure
             attributesToRestore.forEach((element) => {
                 // eslint-disable-next-line no-param-reassign
                 resource[element.name] = element.data;
+
+                bulkData.data[element.name] = element.data;
             });
-            return resourceClone;
+            // link the s3 key to the stripped resource
+            resourceClone.bulkDataLink = bulkDataLink;
+
+            return { resource: resourceClone, bulkData };
         }
-        return resource;
+        return { resource };
     }
 
     private assertValidTenancyMode(tenantId?: string) {
@@ -143,11 +139,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.readResource(request);
-        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(getResponse.resource);
-        if (replaceObjectResult) {
+        const composeResourceResult = await HybridDataService.composeResourceWithS3BulkData(getResponse.resource);
+        if (composeResourceResult) {
             return {
                 message: getResponse.message,
-                resource: replaceObjectResult,
+                resource: composeResourceResult,
             };
         }
         return getResponse;
@@ -156,11 +152,11 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async vReadResource(request: vReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         const getResponse = await this.dbPersistenceService.vReadResource(request);
-        const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(getResponse.resource);
-        if (replaceObjectResult) {
+        const composeResourceResult = await HybridDataService.composeResourceWithS3BulkData(getResponse.resource);
+        if (composeResourceResult) {
             return {
                 message: getResponse.message,
-                resource: replaceObjectResult,
+                resource: composeResourceResult,
             };
         }
         return getResponse;
@@ -174,23 +170,20 @@ export class HybridDataService implements Persistence, BulkDataAccess {
 
     async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
         if (this.shallStoreOnObjectStorage(resourceType)) {
-            const fileName = this.getPathName(resourceId, uuidv4(), resourceType, tenantId);
 
             const resourceClone = clone(resource);
             resourceClone.id = resourceId;
-            const base64Data = encode(JSON.stringify(resourceClone));
 
-            // remove the main payload.
-            const strippedResource = this.stripPayloadFromResource(resourceType, resourceClone);
-
-            // link the s3 key to the stripped resource
-            strippedResource.originalResourceUrl = fileName;
+            const bulkLink = this.getPathName(resourceId, uuidv4(), resourceType, tenantId);
+            // Separate the main payload from the resource.
+            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, bulkLink);
             try {
+                const base64Data = encode(JSON.stringify(separatedResourceData.bulkData));
                 // Ensure the order: first S3 then ddb to avoid possible data races
-                await S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json');
+                await S3ObjectStorageService.uploadObject(base64Data, bulkLink, 'application/json');
                 const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
                     resourceType,
-                    strippedResource,
+                    separatedResourceData.resource,
                     resourceId,
                     tenantId,
                 );
@@ -203,7 +196,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             } catch (e) {
                 await this.dbPersistenceService.deleteResource({
                     resourceType,
-                    id: strippedResource.id,
+                    id: separatedResourceData.resource.id,
                 });
                 throw e;
             }
@@ -225,20 +218,18 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 }
                 throw e;
             }
-            const fileName = this.getPathName(id, uuidv4(), resourceType, tenantId);
             const resourceClone = clone(resource);
-            const base64Data = encode(JSON.stringify(resourceClone));
-            // remove the main payload.
-            const strippedResource = this.stripPayloadFromResource(resourceType, resourceClone);
+            const bulkLink = this.getPathName(id, uuidv4(), resourceType, tenantId);
 
-            // link the s3 key to the stripped resource
-            strippedResource.originalResourceUrl = fileName;
+            // Separate the main payload from the resource.
+            const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, bulkLink);
             try {
+                const base64Data = encode(JSON.stringify(separatedResourceData.bulkData));
                 // Ensure the order: first S3 then ddb to avoid possible data races
-                S3ObjectStorageService.uploadObject(base64Data, fileName, 'application/json');
+                await S3ObjectStorageService.uploadObject(base64Data, bulkLink, 'application/json');
                 const updateResponse = await this.dbPersistenceService.updateResourceNoCheckNoClone(
                     resourceType,
-                    strippedResource,
+                    separatedResourceData.resource,
                     id,
                     tenantId,
                 );
@@ -263,10 +254,10 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const { resourceType, id, tenantId } = request;
         const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
         const { versionId } = itemServiceResponse.resource.meta;
-        const { originalResourceUrl } = itemServiceResponse.resource;
-        if (originalResourceUrl) {
+        const { bulkDataLink } = itemServiceResponse.resource;
+        if (bulkDataLink) {
             const [, deleteResponse] = await Promise.all([
-                S3ObjectStorageService.deleteObject(originalResourceUrl),
+                S3ObjectStorageService.deleteObject(bulkDataLink),
                 this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
             ]);
             return deleteResponse;

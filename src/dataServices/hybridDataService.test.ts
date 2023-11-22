@@ -93,7 +93,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta(request.vid);
-        resourceCopy.originalResourceUrl = fileName;
+        resourceCopy.bulkDataLink = fileName;
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 
@@ -109,7 +109,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta('1');
-        resourceCopy.originalResourceUrl = fileName;
+        resourceCopy.bulkDataLink = fileName;
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 
@@ -132,6 +132,11 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
             message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`,
         };
     });
+}
+
+async function storeQuestionnaireBulkData(resource: any, link: string) {
+    const bulkData: any = { link, data: { item: resource.item } };
+    await TestObjectStorage.uploadObject(encode(JSON.stringify(bulkData)), link, 'application/json');
 }
 
 beforeEach(() => {
@@ -213,11 +218,8 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
             expect(serviceResponse.resource.resourceType).toEqual(`Patient`);
         }
         {
-            await TestObjectStorage.uploadObject(
-                encode(JSON.stringify(vaildV4Questionnaire)),
-                'Test',
-                'application/json',
-            );
+            await storeQuestionnaireBulkData(vaildV4Questionnaire, 'Test');
+
             const resourceId = '98765';
             // Read large Questionnaire
             const serviceResponse = await hybridDataService.readResource({
@@ -242,11 +244,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
             expect(serviceResponse.resource.resourceType).toEqual(`Patient`);
         }
         {
-            await TestObjectStorage.uploadObject(
-                encode(JSON.stringify(vaildV4Questionnaire)),
-                'Test',
-                'application/json',
-            );
+            await storeQuestionnaireBulkData(vaildV4Questionnaire, 'Test');
             const resourceId = '98765';
             // Read large Questionnaire
             const serviceResponse = await hybridDataService.vReadResource({
