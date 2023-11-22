@@ -9,6 +9,7 @@ import AWS from 'aws-sdk';
 import DdbToEsHelper from './ddbToEsHelper';
 import ESBulkCommand from './ESBulkCommand';
 import getComponentLogger from '../loggerBuilder';
+import { HybridDataService } from '../dataServices/hybridDataService';
 
 const logger = getComponentLogger();
 
@@ -76,7 +77,7 @@ export class DdbToEsSync {
 
                 const removeResource = this.ddbToEsHelper.isRemoveResource(record);
                 const ddbJsonImage = removeResource ? record.dynamodb.OldImage : record.dynamodb.NewImage;
-                const image = AWS.DynamoDB.Converter.unmarshall(ddbJsonImage);
+                let image = AWS.DynamoDB.Converter.unmarshall(ddbJsonImage);
                 logger.debug(image);
                 // Don't index binary files
                 if (isBinaryResource(image)) {
@@ -89,7 +90,10 @@ export class DdbToEsSync {
                 if (!this.knownAliases.has(alias.alias)) {
                     aliasesToCreate.push(alias);
                 }
-
+                if (!removeResource) {
+                    // eslint-disable-next-line no-await-in-loop
+                    image = await HybridDataService.composeResource(image);
+                }
                 const cmd = removeResource
                     ? this.ddbToEsHelper.createBulkESDelete(image, alias.alias)
                     : this.ddbToEsHelper.createBulkESUpsert(image, alias.alias);

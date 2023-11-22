@@ -25,7 +25,6 @@ import {
 } from 'fhir-works-on-aws-interface';
 
 import { Buffer } from 'buffer';
-import assert from 'assert';
 import { DynamoDbDataService } from './dynamoDbDataService';
 import { DynamoDbUtil } from './dynamoDbUtil';
 
@@ -53,7 +52,6 @@ export class HybridDataService implements Persistence, BulkDataAccess {
                 const readObjectResult = await S3ObjectStorageService.readObject(strippedResource.originalResourceUrl);
                 const resourceFromS3 = JSON.parse(decode(readObjectResult.message));
                 resourceFromS3.meta = strippedResource.meta;
-                delete resourceFromS3.meta.source;
                 return resourceFromS3;
             } catch (e) {
                 console.log(`Load ${strippedResource.resourceType}: ${strippedResource.id} from S3 failed`);
@@ -61,6 +59,20 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             }
         }
         return undefined;
+    }
+
+    static async composeResource(strippedResource: any): Promise<any> {
+        try {
+            console.log(`Check for composing ${strippedResource.resourceType}: ${strippedResource.id}`);
+            const replaceObjectResult = await HybridDataService.replaceStrippedResourceWithS3Version(strippedResource);
+            if (replaceObjectResult) {
+                console.log(`...${strippedResource.resourceType}: ${strippedResource.id} composed.`);
+                return replaceObjectResult;
+            }
+            return strippedResource;
+        } catch (e) {
+            return strippedResource;
+        }
     }
 
     static async cleanItemAndCompose(item: any) {
