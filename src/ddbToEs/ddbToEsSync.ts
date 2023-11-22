@@ -42,6 +42,13 @@ function getAlias(ddbImage: any) {
     };
 }
 
+async function composeResource(image: any, removeResource: boolean) {
+    if (!removeResource) {
+        return { image: await HybridDataService.composeResource(image), removeResource };
+    }
+    return { image, removeResource };
+}
+
 export class DdbToEsSync {
     private readonly ddbToEsHelper: DdbToEsHelper;
 
@@ -70,26 +77,28 @@ export class DdbToEsSync {
         try {
             const idToCommand: Record<string, ESBulkCommand> = {};
             const aliasesToCreate: { alias: string; index: string }[] = [];
-
+            const composedImages: Array<Promise<any>> = [];
             for (let i = 0; i < event.Records.length; i += 1) {
                 const record = event.Records[i];
                 logger.debug('EventName: ', record.eventName);
 
                 const removeResource = this.ddbToEsHelper.isRemoveResource(record);
                 const ddbJsonImage = removeResource ? record.dynamodb.OldImage : record.dynamodb.NewImage;
-                let image = AWS.DynamoDB.Converter.unmarshall(ddbJsonImage);
+                const image = AWS.DynamoDB.Converter.unmarshall(ddbJsonImage);
                 logger.debug(image);
                 // Don't index binary files
                 if (isBinaryResource(image)) {
                     // eslint-disable-next-line no-continue
                     continue;
                 }
-                if (!removeResource) {
-                    console.log(`Before: ${JSON.stringify(image)}`);
-                    // eslint-disable-next-line no-await-in-loop
-                    image = await HybridDataService.composeResource(image);
-                    console.log(`After: ${JSON.stringify(image)}`);
-                }
+                console.log(`Before: ${JSON.stringify(image)}`);
+                composedImages.push(composeResource(image, removeResource));
+            }
+
+            const composedImagesResults = await Promise.all(composedImages);
+            composedImagesResults.forEach((comsposedImageStruct) => {
+                const { image, removeResource } = comsposedImageStruct;
+                console.log(`After: ${JSON.stringify(image)}`);
                 const alias = this.getAliasFn(image);
 
                 if (!this.knownAliases.has(alias.alias)) {
@@ -106,7 +115,7 @@ export class DdbToEsSync {
                     // Meaning the last record in the event stream is the "newest"
                     idToCommand[cmd.id] = cmd;
                 }
-            }
+            });
             if (!this.disableIndexAndAliasCreation) {
                 await this.ddbToEsHelper.createIndexAndAliasIfNotExist(aliasesToCreate);
                 // update cache of all known aliases

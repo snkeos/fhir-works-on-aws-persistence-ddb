@@ -44,7 +44,6 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     private static async composeResourceWithS3BulkData(resource: any): Promise<any | undefined> {
         if (resource?.bulkDataLink) {
             try {
-                console.log(`Load ${resource.resourceType}: ${resource.id} from S3: ${resource.bulkDataLink}`);
                 const readObjectResult = await S3ObjectStorageService.readObject(resource.bulkDataLink);
                 const bulkDataFromS3 = JSON.parse(decode(readObjectResult.message));
                 if (bulkDataFromS3.link === resource.bulkDataLink) {
