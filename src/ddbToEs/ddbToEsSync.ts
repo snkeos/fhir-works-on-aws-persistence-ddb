@@ -44,7 +44,11 @@ function getAlias(ddbImage: any) {
 
 async function composeResource(image: any, removeResource: boolean) {
     if (!removeResource) {
-        return { image: await HybridDataService.composeResource(image), removeResource };
+        try {
+            return { image: await HybridDataService.attachPayloadToResource(image), removeResource };
+        } catch (e) {
+            return { image, removeResource };
+        }
     }
     return { image, removeResource };
 }

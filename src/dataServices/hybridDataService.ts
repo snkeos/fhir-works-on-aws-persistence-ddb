@@ -35,13 +35,13 @@ export const encode = (str: string): string => Buffer.from(str, 'utf-8').toStrin
 export class HybridDataService implements Persistence, BulkDataAccess {
     updateCreateSupported: boolean = false;
 
-    private resourceTypesToStoreOnObjectStorage: Map<string, Array<string>> = new Map<string, Array<string>>();
+    private attributesToDeloadForResourceType: Map<string, Array<string>> = new Map<string, Array<string>>();
 
     readonly enableMultiTenancy: boolean;
 
     private readonly dbPersistenceService: DynamoDbDataService;
 
-    private static async composeResourceWithS3BulkData(resource: any): Promise<any> {
+    static async attachPayloadToResource(resource: any): Promise<any> {
         if (resource?.bulkDataLink) {
             try {
                 const readObjectResult = await S3ObjectStorageService.readObject(resource.bulkDataLink);
@@ -65,14 +65,6 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         return resource;
     }
 
-    static async composeResource(resource: any): Promise<any> {
-        try {
-            return await HybridDataService.composeResourceWithS3BulkData(resource);
-        } catch (e) {
-            return resource;
-        }
-    }
-
     constructor(
         dbPersistenceService: DynamoDbDataService,
         { enableMultiTenancy = false }: { enableMultiTenancy?: boolean } = {},
@@ -82,20 +74,15 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     }
 
     registerToStoreOnObjectStorage(resourceType: string, attributes: Array<string>): void {
-        this.resourceTypesToStoreOnObjectStorage.set(resourceType, attributes);
+        this.attributesToDeloadForResourceType.set(resourceType, attributes);
     }
 
     private shallStoreOnObjectStorage(resourceType: string): boolean {
-        return this.resourceTypesToStoreOnObjectStorage.has(resourceType);
+        return this.attributesToDeloadForResourceType.has(resourceType);
     }
 
-    private separatePayloadFromResource(
-        resourceType: string,
-        resource: any,
-        resourceId: string,
-        tenantId?: string,
-    ): any {
-        const attributes = this.resourceTypesToStoreOnObjectStorage.get(resourceType);
+    private detachPayloadFromResource(resourceType: string, resource: any, resourceId: string, tenantId?: string): any {
+        const attributes = this.attributesToDeloadForResourceType.get(resourceType);
         if (attributes) {
             // Create a link for S3 object storage
             const bulkDataLink = this.getPathName(resourceId, uuidv4(), resourceType, tenantId);
@@ -145,7 +132,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const getResponse = await this.dbPersistenceService.readResource(request);
         return {
             message: getResponse.message,
-            resource: await HybridDataService.composeResourceWithS3BulkData(getResponse.resource),
+            resource: await HybridDataService.attachPayloadToResource(getResponse.resource),
         };
     }
 
@@ -154,7 +141,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const getResponse = await this.dbPersistenceService.vReadResource(request);
         return {
             message: getResponse.message,
-            resource: await HybridDataService.composeResourceWithS3BulkData(getResponse.resource),
+            resource: await HybridDataService.attachPayloadToResource(getResponse.resource),
         };
     }
 
@@ -172,22 +159,18 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         resourceClone.id = resourceId;
 
         // Separate the main payload from the resource.
-        const separatedResourceData = this.separatePayloadFromResource(
-            resourceType,
-            resourceClone,
-            resourceId,
-            tenantId,
+        const detachedResourceData = this.detachPayloadFromResource(resourceType, resourceClone, resourceId, tenantId);
+
+        // Ensure the order: first S3 then ddb to avoid possible data races
+        await S3ObjectStorageService.uploadObject(
+            detachedResourceData.bulkData,
+            detachedResourceData.bulkDataLink,
+            'application/json',
         );
         try {
-            // Ensure the order: first S3 then ddb to avoid possible data races
-            await S3ObjectStorageService.uploadObject(
-                separatedResourceData.bulkData,
-                separatedResourceData.bulkDataLink,
-                'application/json',
-            );
             const createResponse = await this.dbPersistenceService.createResourceWithIdNoClone(
                 resourceType,
-                separatedResourceData.resource,
+                detachedResourceData.resource,
                 resourceId,
                 tenantId,
             );
@@ -200,10 +183,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             };
         } catch (e) {
             console.log(`Creation of ${resource.resourceType}: ${resource.id} has failed`);
-            await this.dbPersistenceService.deleteResource({
-                resourceType,
-                id: separatedResourceData.resource.id,
-            });
+            await S3ObjectStorageService.deleteObject(detachedResourceData.bulkDataLink);
             throw e;
         }
     }
@@ -225,17 +205,17 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         }
         const resourceClone = clone(resource);
         // Separate the main payload from the resource.
-        const separatedResourceData = this.separatePayloadFromResource(resourceType, resourceClone, id, tenantId);
+        const detachedResourceData = this.detachPayloadFromResource(resourceType, resourceClone, id, tenantId);
+        // Ensure the order: first S3 then ddb to avoid possible data races
+        await S3ObjectStorageService.uploadObject(
+            detachedResourceData.bulkData,
+            detachedResourceData.bulkDataLink,
+            'application/json',
+        );
         try {
-            // Ensure the order: first S3 then ddb to avoid possible data races
-            await S3ObjectStorageService.uploadObject(
-                separatedResourceData.bulkData,
-                separatedResourceData.bulkDataLink,
-                'application/json',
-            );
             const updateResponse = await this.dbPersistenceService.updateResourceNoCheckForExistenceNoClone(
                 resourceType,
-                separatedResourceData.resource,
+                detachedResourceData.resource,
                 id,
                 tenantId,
             );
@@ -249,7 +229,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             };
         } catch (e) {
             console.log(`Update of ${resource.resourceType}: ${resource.id} has failed`);
-            await this.dbPersistenceService.deleteResource({ resourceType: request.resourceType, id });
+            await S3ObjectStorageService.deleteObject(detachedResourceData.bulkDataLink);
             throw e;
         }
     }
