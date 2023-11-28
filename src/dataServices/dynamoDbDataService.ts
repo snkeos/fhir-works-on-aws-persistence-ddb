@@ -129,17 +129,27 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         return this.createResourceWithId(resourceType, resource, uuidv4(), tenantId);
     }
 
-    private async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
+    async createResourceWithId(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
+        return this.createResourceWithIdNoClone(resourceType, clone(resource), resourceId, tenantId);
+    }
+
+    async createResourceWithIdNoClone(resourceType: string, resource: any, resourceId: string, tenantId?: string) {
         const regex = new RegExp('^[a-zA-Z0-9-.]{1,64}$');
         if (!regex.test(resourceId)) {
             throw new InvalidResourceError(`Resource creation failed, id ${resourceId} is not valid`);
         }
 
         const vid = 1;
-        let resourceClone = clone(resource);
-        resourceClone.resourceType = resourceType;
+        let resourceShallowCopy = resource;
+        resourceShallowCopy.resourceType = resourceType;
 
-        const param = DynamoDbParamBuilder.buildPutAvailableItemParam(resourceClone, resourceId, vid, false, tenantId);
+        const param = DynamoDbParamBuilder.buildPutAvailableItemParam(
+            resourceShallowCopy,
+            resourceId,
+            vid,
+            false,
+            tenantId,
+        );
         try {
             await this.dynamoDb.putItem(param).promise();
         } catch (e) {
@@ -150,11 +160,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             throw e;
         }
         const item = DynamoDBConverter.unmarshall(param.Item);
-        resourceClone = DynamoDbUtil.cleanItem(item);
+        resourceShallowCopy = DynamoDbUtil.cleanItem(item);
         return {
             success: true,
             message: 'Resource created',
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
     }
 
@@ -171,7 +181,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         await this.dynamoDb.deleteItem(deleteParamInput).promise();
         return {
             success: true,
-            message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`
+            message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`,
         };
     }
 
@@ -187,12 +197,16 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             }
             throw e;
         }
-        const resourceClone = clone(resource);
+        return this.updateResourceNoCheckForExistenceNoClone(resourceType, clone(resource), id, tenantId);
+    }
+
+    async updateResourceNoCheckForExistenceNoClone(resourceType: string, resource: any, id: string, tenantId?: string) {
+        const resourceShallowCopy = resource;
         const batchRequest: BatchReadWriteRequest = {
             operation: 'update',
             resourceType,
             id,
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
 
         // Sending the request to `atomicallyReadWriteResources` to take advantage of LOCKING management handled by
@@ -203,11 +217,11 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
             tenantId,
         });
         const batchReadWriteEntryResponse = response.batchReadWriteResponses[0];
-        resourceClone.meta = batchReadWriteEntryResponse.resource.meta;
+        resourceShallowCopy.meta = batchReadWriteEntryResponse.resource.meta;
         return {
             success: true,
             message: 'Resource updated',
-            resource: resourceClone,
+            resource: resourceShallowCopy,
         };
     }
 
