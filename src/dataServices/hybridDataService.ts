@@ -222,7 +222,7 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
 
-        const projectionExpression = 'meta, bulkDataLink';
+        const projectionExpression = 'id, meta, bulkDataLink';
         const itemServiceResponses = await this.dbPersistenceService.readAllResourceVersions(
             {
                 resourceType,
