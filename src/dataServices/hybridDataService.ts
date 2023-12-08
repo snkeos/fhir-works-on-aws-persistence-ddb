@@ -231,7 +231,6 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             },
             projectionExpression,
         );
-        console.log(`Found resources to delete: ${itemServiceResponses.length}`);
 
         const deleteRequests: Array<Promise<any>> = [];
         itemServiceResponses.forEach((element: any) => {
