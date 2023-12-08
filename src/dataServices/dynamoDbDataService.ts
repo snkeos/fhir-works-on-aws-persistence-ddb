@@ -95,6 +95,18 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         }
     }
 
+    async readAllResourceVersions(request: ReadResourceRequest, projectionExpression?: string): Promise<Array<any>> {
+        this.assertValidTenancyMode(request.tenantId);
+        const items = await this.dynamoDbHelper.getMostRecentResources(
+            request.resourceType,
+            request.id,
+            0,
+            projectionExpression,
+            request.tenantId,
+        );
+        return items.map((x) => DynamoDbUtil.cleanItem(x));
+    }
+
     async readResource(request: ReadResourceRequest): Promise<GenericResponse> {
         this.assertValidTenancyMode(request.tenantId);
         return this.dynamoDbHelper.getMostRecentUserReadableResource(

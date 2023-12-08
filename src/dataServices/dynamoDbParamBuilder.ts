@@ -100,7 +100,6 @@ export default class DynamoDbParamBuilder {
         const params: any = {
             TableName: RESOURCE_TABLE,
             ScanIndexForward: false,
-            Limit: maxNumberOfVersions,
             FilterExpression: '#r = :resourceType',
             KeyConditionExpression: 'id = :hkey',
             ExpressionAttributeNames: { '#r': 'resourceType' },
@@ -109,7 +108,10 @@ export default class DynamoDbParamBuilder {
                 ':resourceType': resourceType,
             }),
         };
-
+        // If maxNumberOfVersions is zero then retrieve all versions
+        if (maxNumberOfVersions !== 0) {
+            params.Limit = maxNumberOfVersions;
+        }
         if (projectionExpression) {
             // @ts-ignore
             params.ProjectionExpression = projectionExpression;

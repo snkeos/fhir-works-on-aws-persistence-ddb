@@ -221,17 +221,35 @@ export class HybridDataService implements Persistence, BulkDataAccess {
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-        const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
-        const { versionId } = itemServiceResponse.resource.meta;
-        const { bulkDataLink } = itemServiceResponse.resource;
-        if (bulkDataLink) {
-            const [, deleteResponse] = await Promise.all([
-                S3ObjectStorageService.deleteObject(bulkDataLink),
+
+        const projectionExpression = 'meta, bulkDataLink';
+        const itemServiceResponses = await this.dbPersistenceService.readAllResourceVersions(
+            {
+                resourceType,
+                id,
+                tenantId,
+            },
+            projectionExpression,
+        );
+        console.log(`Found resources to delete: ${itemServiceResponses.length}`);
+
+        const deleteRequests: Array<Promise<any>> = [];
+        itemServiceResponses.forEach((element: any) => {
+            const { versionId } = element.meta;
+            const { bulkDataLink } = element;
+            if (bulkDataLink) {
+                deleteRequests.push(S3ObjectStorageService.deleteObject(bulkDataLink));
+            }
+            deleteRequests.push(
                 this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
-            ]);
-            return deleteResponse;
-        }
-        return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+            );
+        });
+
+        await Promise.all(deleteRequests);
+        return {
+            success: true,
+            message: `Successfully deleted all versions of resource Id: ${id}`,
+        };
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

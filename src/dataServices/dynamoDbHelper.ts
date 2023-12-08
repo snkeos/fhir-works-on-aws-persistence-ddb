@@ -17,7 +17,7 @@ export default class DynamoDbHelper {
         this.dynamoDb = dynamoDb;
     }
 
-    private async getMostRecentResources(
+    async getMostRecentResources(
         resourceType: string,
         id: string,
         maxNumberOfVersionsToGet: number,

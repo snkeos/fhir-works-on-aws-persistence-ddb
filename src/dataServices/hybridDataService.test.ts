@@ -67,7 +67,19 @@ class TestObjectStorage {
     }
 }
 
-function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileName: string): void {
+function filterResourceByProjection(resource: any, projectionExpression?: string) {
+    if (projectionExpression) {
+        const projectionAttributes = projectionExpression.split(`, `);
+        const filteredResource: any = {};
+        projectionAttributes.forEach((key: string) => {
+            filteredResource[key] = resource[key];
+        });
+        return filteredResource;
+    }
+    return resource;
+}
+
+function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileNames: Array<string>): void {
     // eslint-disable-next-line no-param-reassign
     dynamoDbDataService.createResourceWithIdNoClone = jest.fn(
         async (resourceType: string, resource: any, resourceId: string, tenantId?: string) => {
@@ -93,7 +105,7 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta(request.vid);
-        resourceCopy.bulkDataLink = fileName;
+        resourceCopy.bulkDataLink = fileNames[parseInt(request.vid, 10) - 1];
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
 
@@ -109,9 +121,28 @@ function mockDynamoDbDataService(dynamoDbDataService: DynamoDbDataService, fileN
         delete resourceCopy.item;
         resourceCopy.id = request.id;
         resourceCopy.meta = generateMeta('1');
-        resourceCopy.bulkDataLink = fileName;
+        [resourceCopy.bulkDataLink] = fileNames;
         return { success: true, message: 'Resource found', resource: resourceCopy };
     });
+    // eslint-disable-next-line no-param-reassign
+    dynamoDbDataService.readAllResourceVersions = jest.fn(
+        async (request: ReadResourceRequest, projectionExpression?: string): Promise<Array<any>> => {
+            return fileNames.map((x: string, index: number) => {
+                if (request.resourceType === `Patient`) {
+                    const resourceCopy: any = { ...validV4Patient };
+                    resourceCopy.id = request.id;
+                    resourceCopy.meta = generateMeta(`${index + 1}`);
+                    return filterResourceByProjection(resourceCopy, projectionExpression);
+                }
+                const resourceCopy: any = { ...vaildV4Questionnaire };
+                delete resourceCopy.item;
+                resourceCopy.id = request.id;
+                resourceCopy.meta = generateMeta(`${index + 1}`);
+                resourceCopy.bulkDataLink = x;
+                return filterResourceByProjection(resourceCopy, projectionExpression);
+            });
+        },
+    );
 
     // eslint-disable-next-line no-param-reassign
     dynamoDbDataService.updateResourceNoCheckForExistenceNoClone = jest.fn(
@@ -168,7 +199,7 @@ describe('Encoding JSON for object storage tests', () => {
 describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
     test('createResource', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
         S3ObjectStorageService.uploadObject = jest.fn(TestObjectStorage.uploadObject);
 
         const tenantId = '1111';
@@ -199,7 +230,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
 
     test('readResource', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
         S3ObjectStorageService.readObject = jest.fn(TestObjectStorage.readObject);
 
         const tenantId = '1111';
@@ -261,7 +292,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
 
     test('updateResource', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
         S3ObjectStorageService.uploadObject = jest.fn(TestObjectStorage.uploadObject);
 
         const tenantId = '1111';
@@ -293,7 +324,7 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
 
     test('deleteResource', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
         S3ObjectStorageService.readObject = jest.fn(TestObjectStorage.readObject);
         S3ObjectStorageService.deleteObject = jest.fn(TestObjectStorage.deleteObject);
         const tenantId = '1111';
@@ -327,12 +358,54 @@ describe('SUCCESS CASES: Store registered resources on DDB and S3', () => {
             expect(serviceResponse.success).toBeTruthy();
         }
     });
+
+    test('deleteResource multiple versions', async () => {
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`, `Testv2`]);
+        S3ObjectStorageService.readObject = jest.fn(TestObjectStorage.readObject);
+        S3ObjectStorageService.deleteObject = jest.fn(TestObjectStorage.deleteObject);
+        const tenantId = '1111';
+
+        const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
+        {
+            await TestObjectStorage.uploadObject(
+                encode(JSON.stringify(vaildV4Questionnaire)),
+                'Test',
+                'application/json',
+            );
+            await TestObjectStorage.uploadObject(
+                encode(JSON.stringify(vaildV4Questionnaire)),
+                'Testv2',
+                'application/json',
+            );
+            const resourceId = '98765';
+            // Delete large Questionnaire
+            const serviceResponse = await hybridDataService.deleteResource({
+                id: resourceId,
+                resourceType: `Questionnaire`,
+                tenantId,
+            });
+            expect(serviceResponse.success).toBeTruthy();
+            expect(TestObjectStorage.isEmpty()).toBeTruthy();
+        }
+        {
+            const resourceId = '123456';
+            // Delete Patient
+            const serviceResponse = await hybridDataService.deleteResource({
+                id: resourceId,
+                resourceType: `Patient`,
+                tenantId,
+            });
+            expect(serviceResponse.success).toBeTruthy();
+        }
+    });
 });
 
 describe('ERROR CASES: Store registered resources on DDB and S3', () => {
     test('readResource: S3 object is not available', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
         S3ObjectStorageService.readObject = jest.fn(TestObjectStorage.readObject);
 
         const tenantId = '1111';
@@ -355,7 +428,7 @@ describe('ERROR CASES: Store registered resources on DDB and S3', () => {
 
     test('createResource/updateResource: store on S3 failed', async () => {
         const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
-        mockDynamoDbDataService(dynamoDbDataService, `Test`);
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`]);
 
         S3ObjectStorageService.uploadObject = jest.fn(TestObjectStorage.uploadObjectWithError);
 
