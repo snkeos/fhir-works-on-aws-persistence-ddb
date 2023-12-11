@@ -218,6 +218,14 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         }
     }
 
+    private async deleteVersionedResource(id: string, versionId: string, bulkDataLink?: string, tenantId?: string) {
+        await this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+        return {
+            id,
+            bulkDataLink,
+        };
+    }
+
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
@@ -232,19 +240,33 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             projectionExpression,
         );
 
-        const deleteRequests: Array<Promise<any>> = [];
+        const deleteDbItemPromsises: Array<Promise<any>> = [];
         itemServiceResponses.forEach((element: any) => {
             const { versionId } = element.meta;
             const { bulkDataLink } = element;
-            if (bulkDataLink) {
-                deleteRequests.push(S3ObjectStorageService.deleteObject(bulkDataLink));
-            }
-            deleteRequests.push(
-                this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
-            );
+            deleteDbItemPromsises.push(this.deleteVersionedResource(id, versionId, bulkDataLink, tenantId));
         });
 
-        await Promise.all(deleteRequests);
+        const deletionDbItemResults = await Promise.all(deleteDbItemPromsises.map((p) => p.catch((e) => e)));
+        const succeedDbItemResults = deletionDbItemResults.filter((x) => !(x instanceof Error));
+        const failedDbItemResults = deletionDbItemResults.filter((x) => x instanceof Error);
+
+        const deleteBulkPromsises: Array<Promise<any>> = [];
+        succeedDbItemResults.forEach((delBulk: any) => {
+            if (delBulk.bulkDataLink) {
+                deleteBulkPromsises.push(S3ObjectStorageService.deleteObject(delBulk.bulkDataLink));
+            }
+        });
+
+        await Promise.all(deleteBulkPromsises);
+
+        if (failedDbItemResults.length !== 0) {
+            return {
+                success: false,
+                message: `Failed to delete all versions of resource Id: ${id}`,
+            };
+        }
+
         return {
             success: true,
             message: `Successfully deleted all versions of resource Id: ${id}`,

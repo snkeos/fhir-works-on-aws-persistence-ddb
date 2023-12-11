@@ -69,12 +69,11 @@ class TestObjectStorage {
 
 function filterResourceByProjection(resource: any, projectionExpression?: string) {
     if (projectionExpression) {
-        const projectionAttributes = projectionExpression.split(`, `);
-        const filteredResource: any = {};
-        projectionAttributes.forEach((key: string) => {
-            filteredResource[key] = resource[key];
-        });
-        return filteredResource;
+        const keyVals = projectionExpression
+            .split(',')
+            .map((el) => el.trim())
+            .map((el) => [el, resource[el]]);
+        return Object.fromEntries(keyVals);
     }
     return resource;
 }
@@ -459,6 +458,60 @@ describe('ERROR CASES: Store registered resources on DDB and S3', () => {
         } catch (e) {
             // CHECK
             expect(e).toEqual(new Error(`Failed uploading binary data to S3`));
+        }
+    });
+
+    test('deleteResource: deletion on ddb failed', async () => {
+        const dynamoDbDataService = new DynamoDbDataService(new AWS.DynamoDB());
+        mockDynamoDbDataService(dynamoDbDataService, [`Test`, `Testv2`]);
+
+        // eslint-disable-next-line no-param-reassign
+        dynamoDbDataService.deleteVersionedResource = jest.fn(async (id: string, vid: number, tenantId?: string) => {
+            if (vid === 1) {
+                throw new Error('ddb error aws error');
+            }
+            return {
+                success: true,
+                message: `Successfully deleted resource Id: ${id}, VersionId: ${vid}`,
+            };
+        });
+
+        S3ObjectStorageService.readObject = jest.fn(TestObjectStorage.readObject);
+        S3ObjectStorageService.deleteObject = jest.fn(TestObjectStorage.deleteObject);
+        const tenantId = '1111';
+
+        const hybridDataService = new HybridDataService(dynamoDbDataService, { enableMultiTenancy: true });
+        hybridDataService.registerToStoreOnObjectStorage(`Questionnaire`, [`item`]);
+        {
+            await TestObjectStorage.uploadObject(
+                encode(JSON.stringify(vaildV4Questionnaire)),
+                'Test',
+                'application/json',
+            );
+            await TestObjectStorage.uploadObject(
+                encode(JSON.stringify(vaildV4Questionnaire)),
+                'Testv2',
+                'application/json',
+            );
+            const resourceId = '98765';
+            // Delete large Questionnaire
+            const serviceResponse = await hybridDataService.deleteResource({
+                id: resourceId,
+                resourceType: `Questionnaire`,
+                tenantId,
+            });
+            expect(serviceResponse.success).toBeFalsy();
+            expect(TestObjectStorage.numberOfObjects()).toEqual(1);
+        }
+        {
+            const resourceId = '123456';
+            // Delete Patient
+            const serviceResponse = await hybridDataService.deleteResource({
+                id: resourceId,
+                resourceType: `Patient`,
+                tenantId,
+            });
+            expect(serviceResponse.success).toBeFalsy();
         }
     });
 });
