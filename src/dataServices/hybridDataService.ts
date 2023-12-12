@@ -252,8 +252,8 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         const failedDbItemResults = deletionDbItemResults.filter((x) => x instanceof Error);
 
         const bulkDelPromises = succeedDbItemResults
-            .filter((currentResult) => currentResult.bulkDataLink)
-            .map((currentBulkLink) => S3ObjectStorageService.deleteObject(currentBulkLink.bulkDataLink));
+            .filter((result) => result.bulkDataLink)
+            .map((resultWithBulkLink) => S3ObjectStorageService.deleteObject(resultWithBulkLink.bulkDataLink));
         await Promise.all(bulkDelPromises);
 
         if (failedDbItemResults.length !== 0) {
