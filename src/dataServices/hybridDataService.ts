@@ -218,20 +218,55 @@ export class HybridDataService implements Persistence, BulkDataAccess {
         }
     }
 
+    private async deleteVersionedResource(id: string, versionId: string, bulkDataLink?: string, tenantId?: string) {
+        await this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+        return {
+            id,
+            bulkDataLink,
+        };
+    }
+
     async deleteResource(request: DeleteResourceRequest) {
         this.assertValidTenancyMode(request.tenantId);
         const { resourceType, id, tenantId } = request;
-        const itemServiceResponse = await this.dbPersistenceService.readResource({ resourceType, id, tenantId });
-        const { versionId } = itemServiceResponse.resource.meta;
-        const { bulkDataLink } = itemServiceResponse.resource;
-        if (bulkDataLink) {
-            const [, deleteResponse] = await Promise.all([
-                S3ObjectStorageService.deleteObject(bulkDataLink),
-                this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId),
-            ]);
-            return deleteResponse;
+
+        const projectionExpression = 'id, meta, bulkDataLink';
+        const itemServiceResponses = await this.dbPersistenceService.readAllResourceVersions(
+            {
+                resourceType,
+                id,
+                tenantId,
+            },
+            projectionExpression,
+        );
+
+        const deleteDbItemPromises: Array<Promise<any>> = [];
+        itemServiceResponses.forEach((element: any) => {
+            const { versionId } = element.meta;
+            const { bulkDataLink } = element;
+            deleteDbItemPromises.push(this.deleteVersionedResource(id, versionId, bulkDataLink, tenantId));
+        });
+
+        const deletionDbItemResults = await Promise.all(deleteDbItemPromises.map((p) => p.catch((e) => e)));
+        const succeedDbItemResults = deletionDbItemResults.filter((x) => !(x instanceof Error));
+        const failedDbItemResults = deletionDbItemResults.filter((x) => x instanceof Error);
+
+        const bulkDelPromises = succeedDbItemResults
+            .filter((result) => result.bulkDataLink)
+            .map((resultWithBulkLink) => S3ObjectStorageService.deleteObject(resultWithBulkLink.bulkDataLink));
+        await Promise.all(bulkDelPromises);
+
+        if (failedDbItemResults.length !== 0) {
+            return {
+                success: false,
+                message: `Failed to delete all versions of resource Id: ${id}`,
+            };
         }
-        return this.dbPersistenceService.deleteVersionedResource(id, parseInt(versionId, 10), tenantId);
+
+        return {
+            success: true,
+            message: `Successfully deleted all versions of resource Id: ${id}`,
+        };
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
