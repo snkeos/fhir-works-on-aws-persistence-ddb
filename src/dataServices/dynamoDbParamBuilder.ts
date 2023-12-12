@@ -93,7 +93,7 @@ export default class DynamoDbParamBuilder {
     static buildGetResourcesQueryParam(
         id: string,
         resourceType: string,
-        maxNumberOfVersions: number,
+        maxNumberOfVersions?: number,
         projectionExpression?: string,
         tenantId?: string,
     ) {
@@ -109,7 +109,7 @@ export default class DynamoDbParamBuilder {
             }),
         };
         // If maxNumberOfVersions is zero then retrieve all versions
-        if (maxNumberOfVersions !== 0) {
+        if (maxNumberOfVersions) {
             params.Limit = maxNumberOfVersions;
         }
         if (projectionExpression) {

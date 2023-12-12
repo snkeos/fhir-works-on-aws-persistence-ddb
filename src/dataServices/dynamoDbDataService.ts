@@ -100,7 +100,7 @@ export class DynamoDbDataService implements Persistence, BulkDataAccess {
         const items = await this.dynamoDbHelper.getMostRecentResources(
             request.resourceType,
             request.id,
-            0,
+            undefined,
             projectionExpression,
             request.tenantId,
         );

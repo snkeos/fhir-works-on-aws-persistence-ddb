@@ -20,7 +20,7 @@ export default class DynamoDbHelper {
     async getMostRecentResources(
         resourceType: string,
         id: string,
-        maxNumberOfVersionsToGet: number,
+        maxNumberOfVersionsToGet?: number,
         projectionExpression?: string,
         tenantId?: string,
     ): Promise<ItemList> {

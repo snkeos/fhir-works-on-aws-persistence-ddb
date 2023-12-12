@@ -240,14 +240,14 @@ export class HybridDataService implements Persistence, BulkDataAccess {
             projectionExpression,
         );
 
-        const deleteDbItemPromsises: Array<Promise<any>> = [];
+        const deleteDbItemPromises: Array<Promise<any>> = [];
         itemServiceResponses.forEach((element: any) => {
             const { versionId } = element.meta;
             const { bulkDataLink } = element;
-            deleteDbItemPromsises.push(this.deleteVersionedResource(id, versionId, bulkDataLink, tenantId));
+            deleteDbItemPromises.push(this.deleteVersionedResource(id, versionId, bulkDataLink, tenantId));
         });
 
-        const deletionDbItemResults = await Promise.all(deleteDbItemPromsises.map((p) => p.catch((e) => e)));
+        const deletionDbItemResults = await Promise.all(deleteDbItemPromises.map((p) => p.catch((e) => e)));
         const succeedDbItemResults = deletionDbItemResults.filter((x) => !(x instanceof Error));
         const failedDbItemResults = deletionDbItemResults.filter((x) => x instanceof Error);
 
